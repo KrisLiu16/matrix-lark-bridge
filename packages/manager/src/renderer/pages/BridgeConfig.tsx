@@ -1,0 +1,249 @@
+import React, { useState, useEffect } from 'react';
+import type { BridgeConfig as BridgeConfigType } from '@mlb/shared';
+import { useBridgeStore } from '../stores/bridge-store';
+import { useI18n } from '../i18n';
+import { toast } from '../stores/toast-store';
+import FeishuSetup from '../components/FeishuSetup';
+
+interface BridgeConfigProps {
+  name: string;
+}
+
+export default function BridgeConfig({ name }: BridgeConfigProps) {
+  const { navigate, updateConfig } = useBridgeStore();
+  const { t } = useI18n();
+  const [config, setConfig] = useState<BridgeConfigType | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [showFeishuSetup, setShowFeishuSetup] = useState(false);
+
+  useEffect(() => {
+    loadConfig();
+  }, [name]);
+
+  async function loadConfig() {
+    try {
+      setLoading(true);
+      const existingConfig = await window.mlb.bridge.readConfig(name);
+      setConfig(existingConfig);
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSave() {
+    if (!config) return;
+    setSaving(true);
+    try {
+      await updateConfig(name, config);
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function updateField<K extends keyof BridgeConfigType>(key: K, value: BridgeConfigType[K]) {
+    if (!config) return;
+    setConfig({ ...config, [key]: value });
+  }
+
+  if (loading) {
+    return (
+      <div className="max-w-2xl mx-auto p-6">
+        <div className="space-y-4">
+          <div className="skeleton h-8 w-48 rounded-lg" />
+          <div className="skeleton h-40 rounded-xl" />
+          <div className="skeleton h-40 rounded-xl" />
+        </div>
+      </div>
+    );
+  }
+
+  if (!config) {
+    return (
+      <div className="max-w-2xl mx-auto p-6">
+        <button onClick={() => navigate('list', name)} className="text-sm text-indigo-600 dark:text-indigo-400 hover:underline mb-4">
+          {t('config.back')}
+        </button>
+        <div className="text-sm text-red-600 dark:text-red-400">{t('config.loadFailed')}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-2xl mx-auto p-6 animate-fade-in">
+      {/* Header */}
+      <div className="flex items-center gap-3 mb-6">
+        <button onClick={() => navigate('list', name)} className="text-sm text-indigo-600 dark:text-indigo-400 hover:underline">
+          {t('config.back')}
+        </button>
+        <h1 className="text-lg font-semibold">{t('config.title', { name })}</h1>
+      </div>
+
+      <div className="space-y-5">
+        {/* Feishu Credentials */}
+        <Section title={t('config.feishu')}>
+          <div className="space-y-3">
+            <Field label={t('config.feishu.appId')} value={config.app_id} onChange={(v) => updateField('app_id', v)} />
+            <Field label={t('config.feishu.appSecret')} value={config.app_secret} onChange={(v) => updateField('app_secret', v)} type="password" />
+            <Field label={t('config.feishu.apiBase')} value={config.api_base_url} onChange={(v) => updateField('api_base_url', v)} />
+          </div>
+
+          <button
+            onClick={() => setShowFeishuSetup(!showFeishuSetup)}
+            className="mt-3 text-sm text-indigo-600 dark:text-indigo-400 hover:underline"
+          >
+            {showFeishuSetup ? t('config.feishu.hideSetup') : t('config.feishu.showSetup')}
+          </button>
+
+          {showFeishuSetup && (
+            <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-700">
+              <FeishuSetup
+                onCredentials={(appId, appSecret, botName) => {
+                  setConfig({
+                    ...config,
+                    app_id: appId,
+                    app_secret: appSecret,
+                    bot_name: botName,
+                  });
+                  setShowFeishuSetup(false);
+                }}
+              />
+            </div>
+          )}
+        </Section>
+
+        {/* Claude Code */}
+        <Section title={t('config.claude')}>
+          <div className="space-y-3">
+            <Field label={t('config.claude.workDir')} value={config.work_dir} onChange={(v) => updateField('work_dir', v)} />
+            <div>
+              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{t('config.claude.mode')}</label>
+              <select
+                value={config.claude.mode}
+                onChange={(e) =>
+                  updateField('claude', {
+                    ...config.claude,
+                    mode: e.target.value as 'default' | 'acceptEdits' | 'bypassPermissions',
+                  })
+                }
+                className="w-full px-3 py-2 rounded-lg text-sm outline-none transition-colors
+                  bg-slate-50 dark:bg-slate-700/50
+                  border border-slate-200 dark:border-slate-600
+                  text-slate-900 dark:text-slate-100
+                  focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+              >
+                <option value="default">Default</option>
+                <option value="acceptEdits">Accept Edits</option>
+                <option value="bypassPermissions">Bypass Permissions</option>
+              </select>
+            </div>
+            <Field
+              label={t('config.claude.model')}
+              value={config.claude.model || ''}
+              onChange={(v) => updateField('claude', { ...config.claude, model: v || undefined })}
+              placeholder={t('config.claude.model.placeholder')}
+            />
+            <div>
+              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{t('config.claude.systemPrompt')}</label>
+              <textarea
+                value={config.claude.system_prompt || ''}
+                onChange={(e) =>
+                  updateField('claude', { ...config.claude, system_prompt: e.target.value || undefined })
+                }
+                rows={3}
+                className="w-full px-3 py-2 rounded-lg text-sm outline-none resize-y transition-colors
+                  bg-slate-50 dark:bg-slate-700/50
+                  border border-slate-200 dark:border-slate-600
+                  text-slate-900 dark:text-slate-100
+                  focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                placeholder={t('config.claude.systemPrompt.placeholder')}
+              />
+            </div>
+          </div>
+        </Section>
+
+        {/* Behavior */}
+        <Section title={t('config.behavior')}>
+          <div className="space-y-3">
+            <label className="flex items-center gap-2.5 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={config.auto_start}
+                onChange={(e) => updateField('auto_start', e.target.checked)}
+                className="rounded border-slate-300 dark:border-slate-600 text-indigo-600 focus:ring-indigo-500"
+              />
+              <span className="text-slate-700 dark:text-slate-300">{t('config.behavior.autoStart')}</span>
+            </label>
+            <label className="flex items-center gap-2.5 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={config.stream_preview.enabled}
+                onChange={(e) =>
+                  updateField('stream_preview', { ...config.stream_preview, enabled: e.target.checked })
+                }
+                className="rounded border-slate-300 dark:border-slate-600 text-indigo-600 focus:ring-indigo-500"
+              />
+              <span className="text-slate-700 dark:text-slate-300">{t('config.behavior.streamPreview')}</span>
+            </label>
+          </div>
+        </Section>
+
+        {/* Save */}
+        <div className="flex gap-3">
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="px-5 py-2.5 bg-indigo-600 text-white text-sm font-medium rounded-xl
+              hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+          >
+            {saving ? t('config.saving') : t('config.save')}
+          </button>
+          <button
+            onClick={() => navigate('list', name)}
+            className="px-5 py-2.5 text-sm font-medium rounded-xl transition-colors
+              bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300
+              hover:bg-slate-200 dark:hover:bg-slate-600"
+          >
+            {t('config.cancel')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5 shadow-sm">
+      <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-4">{title}</h2>
+      {children}
+    </section>
+  );
+}
+
+function Field({
+  label, value, onChange, type = 'text', placeholder,
+}: {
+  label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string;
+}) {
+  return (
+    <div>
+      <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{label}</label>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-full px-3 py-2 rounded-lg text-sm outline-none transition-colors
+          bg-slate-50 dark:bg-slate-700/50
+          border border-slate-200 dark:border-slate-600
+          text-slate-900 dark:text-slate-100
+          focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+      />
+    </div>
+  );
+}

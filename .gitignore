@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+*.tsbuildinfo
+
+# Electron
+out/
+release/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Env & secrets
+.env
+.env.*
+config.json
+
+# Logs
+*.log
+
+# pnpm
+.pnpm-debug.log

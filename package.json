@@ -1,0 +1,18 @@
+{
+  "name": "matrix-lark-bridge-root",
+  "private": true,
+  "scripts": {
+    "dev:bridge": "pnpm -F @mlb/bridge dev",
+    "dev:manager": "pnpm -F @mlb/manager dev",
+    "build:shared": "pnpm -F @mlb/shared build",
+    "build:bridge": "pnpm -F @mlb/bridge build",
+    "build:manager": "pnpm -F @mlb/manager build",
+    "build": "pnpm -r build"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["electron", "esbuild"]
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

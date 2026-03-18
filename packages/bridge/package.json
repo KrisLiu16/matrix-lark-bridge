@@ -1,0 +1,21 @@
+{
+  "name": "@mlb/bridge",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "mlb-bridge": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.59.0",
+    "@mlb/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

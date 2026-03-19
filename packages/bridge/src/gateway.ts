@@ -146,6 +146,7 @@ export class Gateway {
     messageId: string;
     senderInfo?: SenderInfo;
     enqueuedAt: number;
+    cardMsgId?: string; // "已排队" card to reuse
   }> = [];
   private processing = false;
   private maxQueue: number;
@@ -267,13 +268,13 @@ export class Gateway {
         ));
         return;
       }
-      this.messageQueue.push({ content, images, chatId, messageId, senderInfo, enqueuedAt: Date.now() });
-      const pos = this.messageQueue.length;
-      await this.feishu.sendCard(chatId, buildNoticeCard(
+      const pos = this.messageQueue.length + 1;
+      const queueCardId = await this.feishu.sendCard(chatId, buildNoticeCard(
         '已排队',
         `前方还有 ${pos} 条消息，请稍候…`,
         'blue',
       ));
+      this.messageQueue.push({ content, images, chatId, messageId, senderInfo, enqueuedAt: Date.now(), cardMsgId: queueCardId || undefined });
       console.log(`[gateway] message queued (position ${pos}/${this.maxQueue})`);
       return;
     }
@@ -283,7 +284,8 @@ export class Gateway {
 
   /** Process a single message (called directly or from queue) */
   private async processMessage(
-    content: string, images: ImageAttachment[], chatId: string, messageId: string, senderInfo?: SenderInfo,
+    content: string, images: ImageAttachment[], chatId: string, messageId: string,
+    senderInfo?: SenderInfo, reuseCardId?: string,
   ): Promise<void> {
     this.processing = true;
     if (senderInfo) this.lastSenderInfo = senderInfo;
@@ -294,7 +296,15 @@ export class Gateway {
       this.store.addHistory('user', content);
       this.store.resetTurn();
       const thinkingCard = buildThinkingCard(content, this.botName);
-      const cardMsgId = await this.feishu.sendCard(chatId, thinkingCard);
+
+      let cardMsgId: string | undefined;
+      if (reuseCardId) {
+        // Update the "已排队" card to thinking card
+        await this.feishu.updateCard(reuseCardId, thinkingCard);
+        cardMsgId = reuseCardId;
+      } else {
+        cardMsgId = await this.feishu.sendCard(chatId, thinkingCard) || undefined;
+      }
       if (cardMsgId) {
         this.store.setMessageId(cardMsgId);
       }
@@ -344,14 +354,19 @@ export class Gateway {
     const age = Date.now() - next.enqueuedAt;
     if (age > 10 * 60 * 1000) {
       console.log(`[gateway] dropping stale queued message (age=${Math.round(age / 1000)}s)`);
-      this.feishu.sendCard(next.chatId, buildNoticeCard('消息已过期', '排队时间过长，请重新发送。', 'grey')).catch(() => {});
+      const expiredCard = buildNoticeCard('消息已过期', '排队时间过长，请重新发送。', 'grey');
+      if (next.cardMsgId) {
+        this.feishu.updateCard(next.cardMsgId, expiredCard).catch(() => {});
+      } else {
+        this.feishu.sendCard(next.chatId, expiredCard).catch(() => {});
+      }
       // Try next
       this.drainQueue();
       return;
     }
 
     console.log(`[gateway] processing queued message (${this.messageQueue.length} remaining)`);
-    this.processMessage(next.content, next.images, next.chatId, next.messageId, next.senderInfo).catch((err) => {
+    this.processMessage(next.content, next.images, next.chatId, next.messageId, next.senderInfo, next.cardMsgId).catch((err) => {
       console.error('[gateway] queued message error:', err);
     });
   }

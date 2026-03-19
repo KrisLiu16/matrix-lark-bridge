@@ -1,5 +1,5 @@
 import { execSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, copyFileSync, chmodSync } from 'node:fs';
 import { homedir, platform, arch } from 'node:os';
 import { join } from 'node:path';
 
@@ -27,12 +27,9 @@ export interface InstallStepProgress {
 
 const TOTAL_STEPS = 8;
 
-const CLAUDE_PATHS = [
-  join(homedir(), '.local/bin/claude'),
-  '/usr/local/bin/claude',
-  '/opt/homebrew/bin/claude',
-  '/opt/homebrew/Caskroom/claude-code/current/claude',
-];
+/** MLB-dedicated install path — isolated from user's global CC */
+const MLB_BIN_DIR = join(homedir(), '.mlb', 'bin');
+const MLB_CLAUDE_PATH = join(MLB_BIN_DIR, 'claude');
 
 const ENV_CONFIG = {
   ANTHROPIC_AUTH_TOKEN: { value: 'none', masked: false },
@@ -48,39 +45,28 @@ export class ClaudeSetup {
    * Returns installed=false if any critical piece is missing — install flow will fix it.
    */
   check(): ClaudeSetupStatus {
-    // 1. Find binary
-    let claudePath: string | undefined;
-    try {
-      const shell = process.env.SHELL || '/bin/zsh';
-      const p = execSync(`${shell} -l -c "which claude"`, { encoding: 'utf-8', timeout: 5000 }).trim();
-      if (p) claudePath = p;
-    } catch { /* not in PATH */ }
-
-    if (!claudePath) {
-      for (const p of CLAUDE_PATHS) {
-        if (existsSync(p)) { claudePath = p; break; }
-      }
+    // 1. Check MLB-dedicated binary
+    if (!existsSync(MLB_CLAUDE_PATH)) {
+      return { installed: false };
     }
-
-    if (!claudePath) return { installed: false };
 
     // 2. Check settings.json exists and has env config
     const settingsPath = join(homedir(), '.claude', 'settings.json');
     if (!existsSync(settingsPath)) {
-      return { installed: false, path: claudePath, missing: 'settings' };
+      return { installed: false, path: MLB_CLAUDE_PATH, missing: 'settings' };
     }
 
     try {
       const settings = JSON.parse(readFileSync(settingsPath, 'utf-8'));
       const env = settings.env || {};
       if (!env.ANTHROPIC_BASE_URL) {
-        return { installed: false, path: claudePath, missing: 'env_config' };
+        return { installed: false, path: MLB_CLAUDE_PATH, missing: 'env_config' };
       }
     } catch {
-      return { installed: false, path: claudePath, missing: 'settings_parse' };
+      return { installed: false, path: MLB_CLAUDE_PATH, missing: 'settings_parse' };
     }
 
-    return { installed: true, version: this.getVersion(claudePath), path: claudePath };
+    return { installed: true, version: this.getVersion(MLB_CLAUDE_PATH), path: MLB_CLAUDE_PATH };
   }
 
   async install(onProgress: (progress: InstallStepProgress) => void): Promise<ClaudeSetupStatus> {
@@ -125,46 +111,55 @@ export class ClaudeSetup {
         }
         return existing;
       } else if (existing.path) {
-        // Binary found but config missing
+        // Binary found but config missing — skip download
         emit(2, 'check', 'done', {
-          detail: `found at ${existing.path} — config incomplete (${existing.missing})`,
+          detail: `found — config incomplete (${existing.missing})`,
           config: [
-            { key: 'Path', value: existing.path },
+            { key: 'Path', value: MLB_CLAUDE_PATH },
             { key: 'Missing', value: existing.missing || 'config' },
           ],
         });
         emit(3, 'download', 'done', { detail: 'skipped — binary exists' });
+        emit(4, 'install_path', 'done', { detail: 'skipped' });
       } else {
         emit(2, 'check', 'done', { detail: 'not found' });
 
-        // Step 3: Download & install (real)
+        // Step 3: Download via official install script → ~/.local/bin/claude
         emit(3, 'download', 'running', { detail: 'downloading install script...' });
-        const localBinForDownload = join(homedir(), '.local/bin');
         await this.runShellWithProgress(
           'curl -fsSL https://claude.ai/install.sh | bash',
-          0, // no timeout — progress is streamed to UI
+          0,
           (line) => emit(3, 'download', 'running', { detail: line.slice(0, 80) }),
         );
         emit(3, 'download', 'done', {
+          config: [{ key: 'Source', value: 'https://claude.ai/install.sh' }],
+        });
+
+        // Step 4: Copy to MLB-dedicated path ~/.mlb/bin/claude
+        emit(4, 'install_path', 'running');
+        if (!existsSync(MLB_BIN_DIR)) mkdirSync(MLB_BIN_DIR, { recursive: true });
+        // Find the downloaded binary (install.sh puts it in ~/.local/bin/)
+        const downloadedPath = join(homedir(), '.local/bin/claude');
+        if (existsSync(downloadedPath)) {
+          copyFileSync(downloadedPath, MLB_CLAUDE_PATH);
+          chmodSync(MLB_CLAUDE_PATH, 0o755);
+        } else {
+          // Fallback: try which claude via login shell
+          try {
+            const shell = process.env.SHELL || '/bin/zsh';
+            const found = execSync(`${shell} -l -c "which claude"`, { encoding: 'utf-8', timeout: 5000 }).trim();
+            if (found) { copyFileSync(found, MLB_CLAUDE_PATH); chmodSync(MLB_CLAUDE_PATH, 0o755); }
+          } catch {
+            throw new Error('Could not find claude binary after install');
+          }
+        }
+        emit(4, 'install_path', 'done', {
           config: [
-            { key: 'Source', value: 'https://claude.ai/install.sh' },
-            { key: 'Target', value: join(localBinForDownload, 'claude') },
+            { key: 'From', value: downloadedPath },
+            { key: 'To', value: MLB_CLAUDE_PATH },
           ],
         });
       }
-
-      const localBin = join(homedir(), '.local/bin');
-
-      // Step 4: Configure PATH
-      emit(4, 'install_path', 'running');
-      const profileInfo = this.configurePath();
-      emit(4, 'install_path', 'done', {
-        config: [
-          { key: 'Profile', value: profileInfo.profile },
-          { key: 'PATH', value: `$HOME/.local/bin:$PATH` },
-          { key: 'Status', value: profileInfo.alreadySet ? 'already configured' : 'added' },
-        ],
-      });
 
       // Step 5: Create config directory
       emit(5, 'config_dir', 'running');
@@ -202,9 +197,6 @@ export class ClaudeSetup {
 
       // Step 8: Verify installation + first-run initialization
       emit(8, 'verify', 'running', { detail: 'verifying...' });
-      if (!process.env.PATH?.includes(localBin)) {
-        process.env.PATH = `${localBin}:${process.env.PATH}`;
-      }
       const result = this.check();
       if (!result.installed) throw new Error('claude not found after installation');
 
@@ -247,35 +239,26 @@ export class ClaudeSetup {
    */
   async uninstall(): Promise<{ success: boolean; removed: string[] }> {
     const removed: string[] = [];
-    const shell = process.env.SHELL || '/bin/zsh';
 
-    // 1. Find actual binary location via `which claude`
-    let claudePath: string | undefined;
-    try {
-      claudePath = execSync(`${shell} -l -c "which claude"`, { encoding: 'utf-8', timeout: 5000 }).trim();
-    } catch {}
+    // Only remove MLB-dedicated binary (never touch user's global CC)
+    if (existsSync(MLB_CLAUDE_PATH)) {
+      try { rmSync(MLB_CLAUDE_PATH, { force: true }); removed.push(MLB_CLAUDE_PATH); } catch {}
+    }
 
-    // 2. Determine install method and uninstall accordingly
-    if (claudePath?.includes('homebrew') || claudePath?.includes('Caskroom')) {
+    // Remove MLB env config from ~/.claude/settings.json (but keep the file)
+    const settingsPath = join(homedir(), '.claude', 'settings.json');
+    if (existsSync(settingsPath)) {
       try {
-        execSync(`${shell} -l -c "brew uninstall claude-code"`, { timeout: 30000 });
-        removed.push(`brew uninstall claude-code (${claudePath})`);
+        const settings = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+        if (settings.env) {
+          delete settings.env.ANTHROPIC_BASE_URL;
+          delete settings.env.ANTHROPIC_AUTH_TOKEN;
+          delete settings.env.ANTHROPIC_CUSTOM_HEADERS;
+          if (Object.keys(settings.env).length === 0) delete settings.env;
+          writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+          removed.push('settings.json env config');
+        }
       } catch {}
-    } else if (claudePath) {
-      try { rmSync(claudePath, { force: true }); removed.push(claudePath); } catch {}
-    }
-
-    // 3. Also check known paths in case `which` missed something
-    for (const p of CLAUDE_PATHS) {
-      if (existsSync(p)) {
-        try { rmSync(p, { force: true }); removed.push(p); } catch {}
-      }
-    }
-
-    // 4. Remove ~/.claude config directory
-    const claudeDir = join(homedir(), '.claude');
-    if (existsSync(claudeDir)) {
-      try { rmSync(claudeDir, { recursive: true, force: true }); removed.push(claudeDir); } catch {}
     }
 
     console.log(`[claude-setup] uninstalled, removed: ${removed.join(', ')}`);
@@ -339,30 +322,6 @@ export class ClaudeSetup {
       });
       child.on('error', (err) => { clearTimeout(timer); reject(err); });
     });
-  }
-
-  private configurePath(): { profile: string; alreadySet: boolean } {
-    const localBin = join(homedir(), '.local/bin');
-    const pathLine = `export PATH="$HOME/.local/bin:$PATH"`;
-    const shell = process.env.SHELL || '/bin/zsh';
-    const profileName = shell.includes('zsh') ? '.zprofile' : '.bash_profile';
-    const profilePath = join(homedir(), profileName);
-
-    let alreadySet = false;
-    try {
-      const content = existsSync(profilePath) ? readFileSync(profilePath, 'utf-8') : '';
-      if (content.includes('.local/bin')) {
-        alreadySet = true;
-      } else {
-        writeFileSync(profilePath, content + (content.endsWith('\n') ? '' : '\n') + pathLine + '\n');
-      }
-    } catch { /* ignore */ }
-
-    if (!process.env.PATH?.includes(localBin)) {
-      process.env.PATH = `${localBin}:${process.env.PATH}`;
-    }
-
-    return { profile: profilePath, alreadySet };
   }
 
   private configureSettings(): void {

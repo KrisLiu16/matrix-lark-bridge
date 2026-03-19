@@ -6,35 +6,13 @@ import { homedir, tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import type { AgentEvent, PermissionResult, ImageAttachment, McpServerConfig } from './types.js';
 
-function findExecutable(name: string): string {
-  // Check CLAUDE_PATH env first
+/** MLB-dedicated Claude Code binary path */
+const MLB_CLAUDE_PATH = join(homedir(), '.mlb', 'bin', 'claude');
+
+function findExecutable(_name: string): string {
   if (process.env.CLAUDE_PATH) return process.env.CLAUDE_PATH;
-
-  // Use login shell `which` first (gets full PATH including homebrew)
-  try {
-    const shell = process.env.SHELL || '/bin/zsh';
-    const p = execSync(`${shell} -l -c "which ${name}"`, { encoding: 'utf-8', timeout: 5000 }).trim();
-    if (p) return p;
-  } catch { /* not in PATH */ }
-
-  // Common locations fallback
-  const candidates = [
-    join(homedir(), '.local', 'bin', name),
-    `/opt/homebrew/bin/${name}`,
-    `/usr/local/bin/${name}`,
-    `/usr/bin/${name}`,
-  ];
-
-  for (const p of candidates) {
-    if (existsSync(p)) return p;
-  }
-
-  // Bare `which` as last resort
-  try {
-    return execSync(`which ${name}`, { encoding: 'utf-8' }).trim();
-  } catch {
-    return name; // Hope it's in PATH
-  }
+  if (existsSync(MLB_CLAUDE_PATH)) return MLB_CLAUDE_PATH;
+  throw new Error(`Claude Code not found at ${MLB_CLAUDE_PATH}. Please install via Manager.`);
 }
 
 // --- Callback interface (replaces EventEmitter) ---

@@ -189,6 +189,18 @@ export default function BridgeConfig({ name }: BridgeConfigProps) {
               />
               <span className="text-slate-700 dark:text-slate-300">{t('config.behavior.streamPreview')}</span>
             </label>
+            <div className="flex items-center gap-2.5 text-sm">
+              <label className="text-slate-700 dark:text-slate-300">{t('config.behavior.maxQueue')}</label>
+              <input
+                type="number"
+                min={0}
+                max={20}
+                value={config.max_queue ?? 5}
+                onChange={(e) => updateField('max_queue', parseInt(e.target.value) || 0)}
+                className="w-16 px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-600
+                  bg-white dark:bg-slate-800 text-sm"
+              />
+            </div>
           </div>
         </Section>
 

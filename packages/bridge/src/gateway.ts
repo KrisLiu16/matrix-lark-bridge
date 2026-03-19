@@ -138,6 +138,17 @@ export class Gateway {
   private updateQueue: Promise<void> = Promise.resolve();
   private noticeMode = false; // /notice toggle: send usage card on completion
   private contextLimit: number;
+  /** Message queue for sequential processing */
+  private messageQueue: Array<{
+    content: string;
+    images: ImageAttachment[];
+    chatId: string;
+    messageId: string;
+    senderInfo?: SenderInfo;
+    enqueuedAt: number;
+  }> = [];
+  private processing = false;
+  private maxQueue: number;
   private lastSenderInfo: SenderInfo | null = null;
   /** Monotonic counter incremented on /stop; stale processEvents handlers become no-ops */
   private generation = 0;
@@ -161,6 +172,7 @@ export class Gateway {
     const saved = this.store.getState();
     this.noticeMode = saved.noticeMode ?? false;
     this.contextLimit = saved.contextLimit ?? config.claude.context_limit ?? 200_000;
+    this.maxQueue = config.max_queue ?? 5;
   }
 
   async start(): Promise<void> {
@@ -245,20 +257,41 @@ export class Gateway {
       return;
     }
 
-    // Try lock (prevent concurrent messages)
-    if (!this.store.tryLock()) {
-      await this.feishu.sendCard(chatId, buildNoticeCard('正在处理上一条消息', '请稍候…', 'blue'));
+    // Queue mechanism: enqueue message for sequential processing
+    if (this.processing) {
+      if (this.maxQueue > 0 && this.messageQueue.length >= this.maxQueue) {
+        await this.feishu.sendCard(chatId, buildNoticeCard(
+          '队列已满',
+          `当前有 ${this.messageQueue.length} 条消息排队中，请稍后再试。`,
+          'orange',
+        ));
+        return;
+      }
+      this.messageQueue.push({ content, images, chatId, messageId, senderInfo, enqueuedAt: Date.now() });
+      const pos = this.messageQueue.length;
+      await this.feishu.sendCard(chatId, buildNoticeCard(
+        '已排队',
+        `前方还有 ${pos} 条消息，请稍候…`,
+        'blue',
+      ));
+      console.log(`[gateway] message queued (position ${pos}/${this.maxQueue})`);
       return;
     }
 
-    // Start typing indicator
+    await this.processMessage(content, images, chatId, messageId, senderInfo);
+  }
+
+  /** Process a single message (called directly or from queue) */
+  private async processMessage(
+    content: string, images: ImageAttachment[], chatId: string, messageId: string, senderInfo?: SenderInfo,
+  ): Promise<void> {
+    this.processing = true;
+    if (senderInfo) this.lastSenderInfo = senderInfo;
+
     const stopTyping = this.feishu.startTyping(messageId);
 
     try {
-      // Record user message in history
       this.store.addHistory('user', content);
-
-      // Reset turn state and send ThinkingCard
       this.store.resetTurn();
       const thinkingCard = buildThinkingCard(content, this.botName);
       const cardMsgId = await this.feishu.sendCard(chatId, thinkingCard);
@@ -266,15 +299,12 @@ export class Gateway {
         this.store.setMessageId(cardMsgId);
       }
 
-      // Start or resume Claude session and send message
       await this.ensureSession();
-      // Inject current time so CC knows precise time without running `date`
       const now = new Date();
       const timePrefix = `[${now.toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })}] `;
       const contextPrefix = this.buildUserContext(chatId);
       await this.requireSession().send(contextPrefix + timePrefix + content, images.length > 0 ? images : undefined);
 
-      // Process events (with retry on immediate session death)
       let retries = 0;
       let needsRetry = await this.processEvents(chatId, messageId, stopTyping);
       while (needsRetry && retries < MAX_RETRIES) {
@@ -288,7 +318,6 @@ export class Gateway {
         needsRetry = await this.processEvents(chatId, undefined, stopTyping);
       }
       if (needsRetry) {
-        // All retries exhausted — update card to error state
         const msgId = this.store.getState().currentMessageId;
         if (msgId) {
           const errorCard = buildDoneCard('Session failed after retries. Please try again.', [], 0, '0s', this.botName, '');
@@ -299,9 +328,32 @@ export class Gateway {
       console.error('[gateway] error:', err);
       await this.feishu.sendCard(chatId, buildNoticeCard('出错了', `\`${(err as Error).message}\``, 'red')).catch(() => {});
     } finally {
-      stopTyping(); // Safety net — may already be called by processEvents
-      this.store.unlock();
+      stopTyping();
+      this.processing = false;
+      // Process next queued message
+      this.drainQueue();
     }
+  }
+
+  /** Process the next message in the queue (if any) */
+  private drainQueue(): void {
+    if (this.processing || this.messageQueue.length === 0) return;
+
+    const next = this.messageQueue.shift()!;
+    // Skip stale messages (queued > 10 minutes)
+    const age = Date.now() - next.enqueuedAt;
+    if (age > 10 * 60 * 1000) {
+      console.log(`[gateway] dropping stale queued message (age=${Math.round(age / 1000)}s)`);
+      this.feishu.sendCard(next.chatId, buildNoticeCard('消息已过期', '排队时间过长，请重新发送。', 'grey')).catch(() => {});
+      // Try next
+      this.drainQueue();
+      return;
+    }
+
+    console.log(`[gateway] processing queued message (${this.messageQueue.length} remaining)`);
+    this.processMessage(next.content, next.images, next.chatId, next.messageId, next.senderInfo).catch((err) => {
+      console.error('[gateway] queued message error:', err);
+    });
   }
 
   /** Returns this.session or throws if null. Use after ensureSession(). */
@@ -342,6 +394,29 @@ export class Gateway {
       '- Never use Bash+curl to call Feishu APIs — Bash has no access token.',
       '- Detailed usage guides for each tool are in .claude/CLAUDE.md (auto-loaded).',
       '- 时间参数统一使用 ISO 8601 格式（包含时区），例如 2024-01-01T00:00:00+08:00。',
+      '',
+      'YOUR CAPABILITIES (you CAN do all of these, never say you cannot):',
+      '- Search users by name/keyword: use lark_search_user, then get details with lark_get_user',
+      '- Send messages to any user or group: use lark_im_message (action: send, with receive_id)',
+      '- Reply to messages: use lark_im_message (action: reply)',
+      '- Read message history: use lark_im_get_messages',
+      '- Search messages: use lark_im_search_messages',
+      '- Search/manage groups: use lark_chat (search/get) and lark_chat_members',
+      '- Create/read/update calendar events: use lark_calendar_event',
+      '- Create/manage tasks: use lark_task, lark_task_comment, lark_task_subtask',
+      '- Read/create/update documents: use lark_fetch_doc, lark_create_doc, lark_update_doc',
+      '- Search documents and wiki: use lark_search',
+      '- Read/write spreadsheets: use lark_sheet',
+      '- Manage Bitable records: use lark_bitable_record, lark_bitable_field, lark_bitable_table',
+      '- Upload/download files: use lark_drive_file',
+      '- When user mentions a person by name, ALWAYS search first with lark_search_user, then use the result.',
+      '',
+      'PERMISSION NOTICE:',
+      '- You can only send messages to users who have access to this bot (应用可用范围).',
+      '- If sending fails with permission error, tell the user:',
+      '  "该用户暂无此应用的使用权限，无法发送消息。可通过以下方式解决：',
+      '   1. 让对方在飞书中搜索并申请使用本应用',
+      '   2. 由管理员在飞书开放平台 → 应用发布 → 版本管理与发布 中将应用设置为「全体可用」"',
       '',
       'CONFIRMATION RULES (important):',
       '- Before sending messages to other users/groups (lark_im_message send/reply/forward), you MUST use AskUserQuestion to confirm.',
@@ -898,7 +973,10 @@ export class Gateway {
           if (this.pendingAuthCode) {
             this.pendingAuthCode = null;
           }
-          // Release lock so next message can proceed
+          // Clear queue and release processing flag
+          const dropped = this.messageQueue.length;
+          this.messageQueue.length = 0;
+          this.processing = false;
           this.store.unlock();
           await this.feishu.sendCard(chatId, buildNoticeCard('任务已停止', '发送新消息继续', 'orange'));
         } else {

@@ -21,6 +21,7 @@ export interface BridgeConfig {
   };
   auto_start: boolean;
   bot_name?: string;
+  max_queue?: number; // Max queued messages (default 5, 0 = no queue)
 }
 
 // --- Bridge Status (runtime, computed by Manager) ---

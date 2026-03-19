@@ -25,6 +25,7 @@ export interface ClaudeSessionOptions {
   workDir: string;
   mode: 'default' | 'acceptEdits' | 'bypassPermissions';
   model?: string;
+  effort?: 'low' | 'medium' | 'high' | 'max';
   allowedTools?: string[];
   systemPrompt?: string;
   resumeSessionId?: string;
@@ -83,6 +84,10 @@ export class ClaudeSession {
 
     if (this.opts.model) {
       args.push('--model', this.opts.model);
+    }
+
+    if (this.opts.effort) {
+      args.push('--effort', this.opts.effort);
     }
 
     if (this.opts.allowedTools?.length) {

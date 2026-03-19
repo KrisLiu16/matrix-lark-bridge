@@ -51,7 +51,18 @@ export class StreamPreview {
       ? this.buffer.substring(0, this.config.max_chars) + '\n...'
       : this.buffer;
 
-    const card = buildMarkdownCard(content + '\n\n⏳ _generating..._');
+    const card = {
+      schema: '2.0',
+      config: { wide_screen_mode: true },
+      header: {
+        title: { tag: 'plain_text', content: '生成中…' },
+        template: 'indigo',
+        icon: { tag: 'standard_icon', token: 'loading_outlined' },
+      },
+      body: {
+        elements: [{ tag: 'markdown', content }],
+      },
+    };
 
     try {
       if (!this.previewMessageId) {

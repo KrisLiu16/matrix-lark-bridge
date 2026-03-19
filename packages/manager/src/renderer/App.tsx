@@ -109,16 +109,16 @@ export default function App() {
           <span className="ml-auto flex items-center gap-3">
             <button
               onClick={async () => {
-                if (!confirm('修复 Claude Code 环境？\n\n将自动检测并修复环境配置问题。\n修复后点击一键配置。')) return;
+                if (!confirm('卸载内置 Claude Code？\n\n仅删除 ~/.mlb/bin/claude，不影响系统中其他 Claude Code。')) return;
                 try {
                   await window.mlb.claude.uninstall();
                   checkClaude(); // re-check → will show setup page for reinstall
                 } catch (e) { alert(`操作失败: ${e}`); }
               }}
               className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
-              title="重置 Claude Code 环境"
+              title="卸载内置 Claude Code"
             >
-              Session failed? 点此修复
+              卸载内置CC
             </button>
             <span>MLB Manager v{__MLB_VERSION__}</span>
           </span>

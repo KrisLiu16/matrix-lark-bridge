@@ -154,6 +154,21 @@ export default function BridgeConfig({ name }: BridgeConfigProps) {
               placeholder={t('config.claude.model.placeholder')}
             />
             <div>
+              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{t('config.claude.effort')}</label>
+              <select
+                value={config.claude.effort || 'medium'}
+                onChange={(e) => updateField('claude', { ...config.claude, effort: e.target.value as any })}
+                className="w-full px-3 py-2 rounded-lg text-sm outline-none transition-colors
+                  bg-slate-50 dark:bg-slate-700/50 border border-slate-200 dark:border-slate-600
+                  text-slate-900 dark:text-slate-100 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+              >
+                <option value="low">Low</option>
+                <option value="medium">Medium (default)</option>
+                <option value="high">High</option>
+                <option value="max">Max</option>
+              </select>
+            </div>
+            <div>
               <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{t('config.claude.systemPrompt')}</label>
               <textarea
                 value={config.claude.system_prompt || ''}

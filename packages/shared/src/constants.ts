@@ -33,8 +33,9 @@ export const DEFAULT_CLAUDE_ENV = {
 export const DEFAULT_BRIDGE_CONFIG = {
   api_base_url: DEFAULT_API_BASE_URL,
   claude: {
-    mode: 'default' as const,
+    mode: 'default',
     model: 'sonnet',
+    effort: 'medium',
     env: { ...DEFAULT_CLAUDE_ENV },
   },
   stream_preview: {

@@ -1,6 +1,6 @@
 {
   "name": "@mlb/manager",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "main": "dist/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",

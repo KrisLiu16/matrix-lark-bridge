@@ -9,6 +9,7 @@ export interface BridgeConfig {
   claude: {
     mode: 'default' | 'acceptEdits' | 'bypassPermissions';
     model?: string;
+    effort?: 'low' | 'medium' | 'high' | 'max';
     system_prompt?: string;
     allowed_tools?: string[];
     context_limit?: number; // Max context tokens (default 200000)

@@ -482,6 +482,14 @@ export class Gateway {
     };
 
     try {
+      // MLB-specific env vars — injected per-process, not global
+      const claudeEnv: Record<string, string> = {};
+      if (this.config.claude.env) {
+        for (const [k, v] of Object.entries(this.config.claude.env)) {
+          if (v) claudeEnv[k] = v;
+        }
+      }
+
       this.session = new ClaudeSession({
         workDir: state.workDir,
         mode: this.config.claude.mode,
@@ -490,6 +498,7 @@ export class Gateway {
         systemPrompt,
         resumeSessionId: resumeId,
         mcpServers,
+        env: claudeEnv,
       }, callbacks);
       await this.session.start();
     } catch (err) {
@@ -497,6 +506,12 @@ export class Gateway {
       if (resumeId) {
         console.warn(`[gateway] resume failed: ${(err as Error).message}, starting fresh`);
         this.store.setAgentSessionId(undefined);
+        const claudeEnvRetry: Record<string, string> = {};
+        if (this.config.claude.env) {
+          for (const [k, v] of Object.entries(this.config.claude.env)) {
+            if (v) claudeEnvRetry[k] = v;
+          }
+        }
         this.session = new ClaudeSession({
           workDir: state.workDir,
           mode: this.config.claude.mode,
@@ -504,6 +519,7 @@ export class Gateway {
           allowedTools: this.config.claude.allowed_tools,
           systemPrompt,
           mcpServers,
+          env: claudeEnvRetry,
         }, callbacks);
         await this.session.start();
       } else {

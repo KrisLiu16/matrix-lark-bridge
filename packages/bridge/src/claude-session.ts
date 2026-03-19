@@ -29,6 +29,8 @@ export interface ClaudeSessionOptions {
   systemPrompt?: string;
   resumeSessionId?: string;
   mcpServers?: Record<string, McpServerConfig>;
+  /** Environment variables injected into the CC process (MLB config, not global) */
+  env?: Record<string, string>;
 }
 
 export class ClaudeSession {
@@ -108,10 +110,17 @@ export class ClaudeSession {
     const claudePath = findExecutable('claude');
     console.log(`[claudecode] using binary: ${claudePath}`);
 
-    this.proc = spawn(claudePath, args, {
+    // Spawn via login shell so CC runs in user's real environment
+    // Inject MLB-specific env vars (API endpoint, auth, etc.) per-process
+    const shell = process.env.SHELL || '/bin/zsh';
+    const cmdLine = `"${claudePath}" ${args.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}`;
+    this.proc = spawn(shell, ['-l', '-c', cmdLine], {
       cwd: this.opts.workDir,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env },
+      env: {
+        ...process.env,
+        ...(this.opts.env || {}),
+      },
     });
 
     this._alive = true;

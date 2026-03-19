@@ -163,6 +163,37 @@ export default function BridgeConfig({ name }: BridgeConfigProps) {
                 placeholder={t('config.claude.systemPrompt.placeholder')}
               />
             </div>
+            {/* Runtime env config */}
+            <div className="pt-2 border-t border-slate-200 dark:border-slate-700">
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-medium text-slate-600 dark:text-slate-400">{t('config.claude.env')}</label>
+                <button
+                  onClick={() => {
+                    const { DEFAULT_CLAUDE_ENV } = require('@mlb/shared');
+                    updateField('claude', { ...config.claude, env: { ...DEFAULT_CLAUDE_ENV } });
+                  }}
+                  className="text-xs text-indigo-500 hover:text-indigo-600 transition-colors"
+                >{t('config.claude.env.reset')}</button>
+              </div>
+              <Field
+                label="ANTHROPIC_BASE_URL"
+                value={config.claude.env?.ANTHROPIC_BASE_URL || ''}
+                onChange={(v) => updateField('claude', { ...config.claude, env: { ...config.claude.env, ANTHROPIC_BASE_URL: v } })}
+                placeholder="https://api.anthropic.com"
+              />
+              <Field
+                label="ANTHROPIC_AUTH_TOKEN"
+                value={config.claude.env?.ANTHROPIC_AUTH_TOKEN || ''}
+                onChange={(v) => updateField('claude', { ...config.claude, env: { ...config.claude.env, ANTHROPIC_AUTH_TOKEN: v } })}
+                placeholder="none"
+              />
+              <Field
+                label="ANTHROPIC_CUSTOM_HEADERS"
+                value={config.claude.env?.ANTHROPIC_CUSTOM_HEADERS || ''}
+                onChange={(v) => updateField('claude', { ...config.claude, env: { ...config.claude.env, ANTHROPIC_CUSTOM_HEADERS: v } })}
+                placeholder=""
+              />
+            </div>
           </div>
         </Section>
 

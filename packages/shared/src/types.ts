@@ -12,6 +12,12 @@ export interface BridgeConfig {
     system_prompt?: string;
     allowed_tools?: string[];
     context_limit?: number; // Max context tokens (default 200000)
+    env?: {
+      ANTHROPIC_BASE_URL?: string;
+      ANTHROPIC_AUTH_TOKEN?: string;
+      ANTHROPIC_CUSTOM_HEADERS?: string;
+      [key: string]: string | undefined;
+    };
   };
   stream_preview: {
     enabled: boolean;

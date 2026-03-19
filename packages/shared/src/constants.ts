@@ -23,10 +23,19 @@ export const CONFIG_FILE = 'config.json';
 export const SESSION_FILE = 'session.json';
 
 /** Default bridge config values */
+/** Default Claude Code env — injected per-process, not written to global settings */
+export const DEFAULT_CLAUDE_ENV = {
+  ANTHROPIC_BASE_URL: 'https://talkie-ali-virginia-prod-internal.xaminim.com/llm/debug/claude',
+  ANTHROPIC_AUTH_TOKEN: 'none',
+  ANTHROPIC_CUSTOM_HEADERS: 'X-Biz-Id: claude-code',
+};
+
 export const DEFAULT_BRIDGE_CONFIG = {
   api_base_url: DEFAULT_API_BASE_URL,
   claude: {
     mode: 'default' as const,
+    model: 'sonnet',
+    env: { ...DEFAULT_CLAUDE_ENV },
   },
   stream_preview: {
     enabled: true,

@@ -25,47 +25,23 @@ export interface InstallStepProgress {
   error?: string;
 }
 
-const TOTAL_STEPS = 8;
+const TOTAL_STEPS = 5;
 
 /** MLB-dedicated install path — isolated from user's global CC */
 const MLB_BIN_DIR = join(homedir(), '.mlb', 'bin');
 const MLB_CLAUDE_PATH = join(MLB_BIN_DIR, 'claude');
 
-const ENV_CONFIG = {
-  ANTHROPIC_AUTH_TOKEN: { value: 'none', masked: false },
-  ANTHROPIC_BASE_URL: { value: 'https://talkie-ali-virginia-prod-internal.xaminim.com/llm/debug/claude', masked: false },
-  ANTHROPIC_CUSTOM_HEADERS: { value: 'X-Biz-Id: claude-code', masked: false },
-};
-
 export class ClaudeSetup {
   private _installing = false;
 
   /**
-   * Comprehensive check: binary exists + settings configured + env vars set.
-   * Returns installed=false if any critical piece is missing — install flow will fix it.
+   * Check if MLB-dedicated CC binary exists.
+   * Config is injected per-process via env vars — no global settings check needed.
    */
   check(): ClaudeSetupStatus {
-    // 1. Check MLB-dedicated binary
     if (!existsSync(MLB_CLAUDE_PATH)) {
       return { installed: false };
     }
-
-    // 2. Check settings.json exists and has env config
-    const settingsPath = join(homedir(), '.claude', 'settings.json');
-    if (!existsSync(settingsPath)) {
-      return { installed: false, path: MLB_CLAUDE_PATH, missing: 'settings' };
-    }
-
-    try {
-      const settings = JSON.parse(readFileSync(settingsPath, 'utf-8'));
-      const env = settings.env || {};
-      if (!env.ANTHROPIC_BASE_URL) {
-        return { installed: false, path: MLB_CLAUDE_PATH, missing: 'env_config' };
-      }
-    } catch {
-      return { installed: false, path: MLB_CLAUDE_PATH, missing: 'settings_parse' };
-    }
-
     return { installed: true, version: this.getVersion(MLB_CLAUDE_PATH), path: MLB_CLAUDE_PATH };
   }
 
@@ -106,21 +82,10 @@ export class ClaudeSetup {
           ],
         });
         for (let i = 3; i <= TOTAL_STEPS; i++) {
-          const ids = ['download', 'install_path', 'config_dir', 'config_endpoint', 'config_env', 'verify'];
+          const ids = ['download', 'install_path', 'verify'];
           emit(i, ids[i - 3] || `step${i}`, 'done', { detail: 'skipped' });
         }
         return existing;
-      } else if (existing.path) {
-        // Binary found but config missing — skip download
-        emit(2, 'check', 'done', {
-          detail: `found — config incomplete (${existing.missing})`,
-          config: [
-            { key: 'Path', value: MLB_CLAUDE_PATH },
-            { key: 'Missing', value: existing.missing || 'config' },
-          ],
-        });
-        emit(3, 'download', 'done', { detail: 'skipped — binary exists' });
-        emit(4, 'install_path', 'done', { detail: 'skipped' });
       } else {
         emit(2, 'check', 'done', { detail: 'not found' });
 
@@ -161,60 +126,26 @@ export class ClaudeSetup {
         });
       }
 
-      // Step 5: Create config directory
-      emit(5, 'config_dir', 'running');
-      const claudeDir = join(homedir(), '.claude');
-      const settingsPath = join(claudeDir, 'settings.json');
-      if (!existsSync(claudeDir)) mkdirSync(claudeDir, { recursive: true });
-      emit(5, 'config_dir', 'done', {
-        config: [
-          { key: 'Directory', value: claudeDir },
-          { key: 'Settings', value: settingsPath },
-        ],
-      });
-
-      // Step 6: Configure API endpoint
-      emit(6, 'config_endpoint', 'running');
-      await this.sleep(300);
-      emit(6, 'config_endpoint', 'done', {
-        config: [
-          { key: 'ANTHROPIC_BASE_URL', value: ENV_CONFIG.ANTHROPIC_BASE_URL.value },
-          { key: 'ANTHROPIC_AUTH_TOKEN', value: 'none (proxy auth)' },
-        ],
-      });
-
-      // Step 7: Configure environment variables
-      emit(7, 'config_env', 'running');
-      this.configureSettings();
-      await this.sleep(300);
-      emit(7, 'config_env', 'done', {
-        config: [
-          { key: 'ANTHROPIC_CUSTOM_HEADERS', value: ENV_CONFIG.ANTHROPIC_CUSTOM_HEADERS.value },
-          { key: 'File', value: settingsPath },
-          { key: 'Status', value: 'written' },
-        ],
-      });
-
-      // Step 8: Verify installation + first-run initialization
-      emit(8, 'verify', 'running', { detail: 'verifying...' });
+      // Step 5: Verify installation + first-run initialization
+      emit(5, 'verify', 'running', { detail: 'verifying...' });
       const result = this.check();
       if (!result.installed) throw new Error('claude not found after installation');
 
       // Run `claude -p "hello"` to complete first-run setup (accept ToS, etc.)
       // -p mode skips workspace trust dialog and handles first-run non-interactively
-      emit(8, 'verify', 'running', { detail: 'completing first-run setup...' });
+      emit(5, 'verify', 'running', { detail: 'completing first-run setup...' });
       try {
         await this.runShellWithProgress(
           `"${result.path}" -p "hello" 2>&1 || true`,
           0, // no timeout
-          (line) => emit(8, 'verify', 'running', { detail: line.slice(0, 80) }),
+          (line) => emit(5, 'verify', 'running', { detail: line.slice(0, 80) }),
         );
       } catch {
         // First-run may fail if API is unreachable — that's OK, binary is still installed
         console.warn('[claude-setup] first-run test failed, continuing anyway');
       }
 
-      emit(8, 'verify', 'done', {
+      emit(5, 'verify', 'done', {
         detail: `v${result.version}`,
         config: [
           { key: 'Binary', value: result.path! },
@@ -240,25 +171,9 @@ export class ClaudeSetup {
   async uninstall(): Promise<{ success: boolean; removed: string[] }> {
     const removed: string[] = [];
 
-    // Only remove MLB-dedicated binary (never touch user's global CC)
+    // Only remove MLB-dedicated binary — never touch user's global CC or ~/.claude/
     if (existsSync(MLB_CLAUDE_PATH)) {
       try { rmSync(MLB_CLAUDE_PATH, { force: true }); removed.push(MLB_CLAUDE_PATH); } catch {}
-    }
-
-    // Remove MLB env config from ~/.claude/settings.json (but keep the file)
-    const settingsPath = join(homedir(), '.claude', 'settings.json');
-    if (existsSync(settingsPath)) {
-      try {
-        const settings = JSON.parse(readFileSync(settingsPath, 'utf-8'));
-        if (settings.env) {
-          delete settings.env.ANTHROPIC_BASE_URL;
-          delete settings.env.ANTHROPIC_AUTH_TOKEN;
-          delete settings.env.ANTHROPIC_CUSTOM_HEADERS;
-          if (Object.keys(settings.env).length === 0) delete settings.env;
-          writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-          removed.push('settings.json env config');
-        }
-      } catch {}
     }
 
     console.log(`[claude-setup] uninstalled, removed: ${removed.join(', ')}`);
@@ -324,25 +239,7 @@ export class ClaudeSetup {
     });
   }
 
-  private configureSettings(): void {
-    const claudeDir = join(homedir(), '.claude');
-    const settingsPath = join(claudeDir, 'settings.json');
 
-    if (!existsSync(claudeDir)) mkdirSync(claudeDir, { recursive: true });
-
-    let existing: Record<string, unknown> = {};
-    if (existsSync(settingsPath)) {
-      try { existing = JSON.parse(readFileSync(settingsPath, 'utf-8')); } catch { /* overwrite */ }
-    }
-
-    if (!existing.env) {
-      existing.env = Object.fromEntries(
-        Object.entries(ENV_CONFIG).map(([k, v]) => [k, v.value]),
-      );
-    }
-
-    writeFileSync(settingsPath, JSON.stringify(existing, null, 2));
-  }
 
   private sleep(ms: number): Promise<void> {
     return new Promise((r) => setTimeout(r, ms));

@@ -117,7 +117,7 @@ export class ClaudeSession {
 
     // Spawn via login shell so CC runs in user's real environment
     // Inject MLB-specific env vars (API endpoint, auth, etc.) per-process
-    const shell = process.env.SHELL || '/bin/zsh';
+    const shell = process.env.SHELL || '/bin/sh';
     const cmdLine = `"${claudePath}" ${args.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}`;
     this.proc = spawn(shell, ['-l', '-c', cmdLine], {
       cwd: this.opts.workDir,

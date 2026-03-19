@@ -66,6 +66,7 @@ export default function NewBridge() {
       claude: {
         mode,
         model: 'sonnet',
+        effort: 'medium',
         env: { ...DEFAULT_CLAUDE_ENV },
       },
       stream_preview: {

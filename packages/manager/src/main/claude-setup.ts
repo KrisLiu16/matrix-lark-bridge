@@ -58,7 +58,7 @@ export class ClaudeSetup {
       emit(1, 'env', 'running');
       const os = platform();
       const cpu = arch();
-      const shell = process.env.SHELL || '/bin/zsh';
+      const shell = process.env.SHELL || '/bin/sh';
       const shellName = shell.split('/').pop() || 'zsh';
       await this.sleep(500);
       emit(1, 'env', 'done', {
@@ -188,7 +188,7 @@ export class ClaudeSetup {
   /** Run a command in a login shell with streaming progress callback */
   private runShellWithProgress(cmd: string, timeout: number, onLine?: (line: string) => void): Promise<string> {
     return new Promise((resolve, reject) => {
-      const shell = process.env.SHELL || '/bin/zsh';
+      const shell = process.env.SHELL || '/bin/sh';
       // Use login shell (-l) so PATH includes homebrew, .local/bin, etc.
       const child = spawn(shell, ['-l', '-c', cmd], {
         env: process.env,

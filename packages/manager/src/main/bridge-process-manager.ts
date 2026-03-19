@@ -152,7 +152,7 @@ export class BridgeProcessManager {
       ELECTRON_RUN_AS_NODE: '1',
     };
     // Copy necessary env vars
-    for (const key of ['PATH', 'HOME', 'NODE_ENV', 'NODE_PATH']) {
+    for (const key of ['PATH', 'HOME', 'SHELL', 'NODE_ENV', 'NODE_PATH']) {
       if (process.env[key]) childEnv[key] = process.env[key]!;
     }
     // Forward LARK_* env vars needed by MCP server

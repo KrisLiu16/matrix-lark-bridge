@@ -1,8 +1,10 @@
 import React, { useEffect, useCallback } from 'react';
 import { useBridgeStore } from './stores/bridge-store';
+import { useClaudeSetupStore } from './stores/claude-setup-store';
 import { useI18n } from './i18n';
 import Sidebar from './components/Sidebar';
 import ToastContainer from './components/Toast';
+import ClaudeSetup from './components/ClaudeSetup';
 import BridgeConfig from './pages/BridgeConfig';
 import NewBridge from './pages/NewBridge';
 import LogViewer from './pages/LogViewer';
@@ -10,7 +12,11 @@ import SessionViewer from './pages/SessionViewer';
 
 export default function App() {
   const { currentPage, selectedBridge, fetchBridges, navigate, bridges } = useBridgeStore();
+  const { installed: claudeInstalled, checking: claudeChecking, checkClaude } = useClaudeSetupStore();
   const { locale, setLocale, t } = useI18n();
+
+  // Check Claude Code on mount
+  useEffect(() => { checkClaude(); }, [checkClaude]);
 
   // Fetch bridges on mount and every 5 seconds
   useEffect(() => {
@@ -84,7 +90,11 @@ export default function App() {
 
         {/* Page content */}
         <div className="flex-1 overflow-auto animate-fade-in">
-          {renderContent()}
+          {claudeInstalled === false ? (
+            <ClaudeSetup onComplete={() => checkClaude()} />
+          ) : (
+            renderContent()
+          )}
         </div>
 
         {/* Status bar */}

@@ -6,6 +6,7 @@ import { BridgeProcessManager } from './bridge-process-manager.js';
 import { ConfigStore } from './config-store.js';
 import { AutoStartManager } from './auto-start.js';
 import { FeishuSetup } from './feishu-setup.js';
+import { ClaudeSetup } from './claude-setup.js';
 import { registerIPCHandlers } from './ipc-handlers.js';
 
 let mainWindow: BrowserWindow | null = null;
@@ -131,9 +132,10 @@ app.whenReady().then(async () => {
   const configStore = new ConfigStore();
   const autoStart = new AutoStartManager();
   const feishuSetup = new FeishuSetup();
+  const claudeSetup = new ClaudeSetup();
 
   // Register IPC handlers
-  registerIPCHandlers(processManager, configStore, autoStart, feishuSetup, () => mainWindow);
+  registerIPCHandlers(processManager, configStore, autoStart, feishuSetup, claudeSetup, () => mainWindow);
 
   // IPC handler for tray bridge count
   ipcMain.handle('app:get-running-count', async () => {

@@ -5,6 +5,7 @@ import type { BridgeProcessManager } from './bridge-process-manager.js';
 import type { ConfigStore } from './config-store.js';
 import type { AutoStartManager } from './auto-start.js';
 import type { FeishuSetup } from './feishu-setup.js';
+import type { ClaudeSetup } from './claude-setup.js';
 
 const BRIDGE_NAME_RE = /^[a-zA-Z0-9_-]+$/;
 
@@ -29,6 +30,7 @@ export function registerIPCHandlers(
   configStore: ConfigStore,
   autoStart: AutoStartManager,
   feishuSetup: FeishuSetup,
+  claudeSetup: ClaudeSetup,
   getMainWindow: () => BrowserWindow | null,
 ): void {
   // --- Bridge management ---
@@ -153,5 +155,19 @@ export function registerIPCHandlers(
 
   ipcMain.handle('app:get-locale', () => {
     return app.getLocale();
+  });
+
+  // --- Claude Code setup ---
+
+  ipcMain.handle('claude:check', () => {
+    return claudeSetup.check();
+  });
+
+  ipcMain.handle('claude:install', async () => {
+    const win = getMainWindow();
+    const result = await claudeSetup.install((progress) => {
+      try { win?.webContents.send('claude-setup:step-progress', progress); } catch { /* window closed */ }
+    });
+    return result;
   });
 }

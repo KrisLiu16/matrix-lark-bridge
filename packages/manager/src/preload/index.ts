@@ -30,10 +30,23 @@ const api = {
     disable: (name: string): Promise<void> => ipcRenderer.invoke('autostart:disable', name),
     status: (name: string): Promise<boolean> => ipcRenderer.invoke('autostart:status', name),
   },
+  claude: {
+    check: (): Promise<{ installed: boolean; version?: string; path?: string }> =>
+      ipcRenderer.invoke('claude:check'),
+    install: (): Promise<{ installed: boolean; version?: string; path?: string }> =>
+      ipcRenderer.invoke('claude:install'),
+  },
   system: {
     getWorkspaceRoot: (): Promise<string> => ipcRenderer.invoke('app:get-workspace-root'),
     getLocale: (): Promise<string> => ipcRenderer.invoke('app:get-locale'),
     getRunningCount: (): Promise<number> => ipcRenderer.invoke('app:get-running-count'),
+  },
+  onClaudeSetupProgress: (callback: (progress: {
+    step: number; totalSteps: number; status: string; label: string; detail?: string; error?: string;
+  }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, progress: any) => callback(progress);
+    ipcRenderer.on('claude-setup:step-progress', handler);
+    return () => { ipcRenderer.removeListener('claude-setup:step-progress', handler); };
   },
   onLogLine: (callback: (data: { name: string; line: string }) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, data: { name: string; line: string }) => callback(data);

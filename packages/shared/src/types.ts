@@ -11,6 +11,7 @@ export interface BridgeConfig {
     model?: string;
     system_prompt?: string;
     allowed_tools?: string[];
+    context_limit?: number; // Max context tokens (default 200000)
   };
   stream_preview: {
     enabled: boolean;
@@ -45,6 +46,13 @@ export interface SessionState {
   stepCount: number;
   startTime?: number;
   steps: StepInfo[];
+  noticeMode?: boolean;
+  contextLimit?: number;
+  history?: Array<{
+    role: 'user' | 'assistant';
+    content: string;
+    timestamp: string;
+  }>;
 }
 
 export interface StepInfo {

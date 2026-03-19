@@ -1,4 +1,9 @@
 import { createInterface } from 'node:readline';
+import * as lark from '@larksuiteoapi/node-sdk';
+import { ALL_TOOLS, OAPI_TOOL_NAMES, MCP_DOC_TOOL_NAMES, resolveTokenMode, type TokenMode } from './mcp-tools.js';
+import { executeOapiTool } from './mcp-tool-handlers.js';
+import { MlbMcpError, UserAuthRequiredError, UserScopeInsufficientError, AppScopeMissingError } from './mcp-errors.js';
+import { getRequiredScopes } from './mcp-tool-scopes.js';
 
 interface McpRequest {
   jsonrpc: '2.0';
@@ -9,14 +14,14 @@ interface McpRequest {
 
 const TOOL_DEFINITION = {
   name: 'lark_api',
-  description: `Call any Feishu/Lark Open API. The app's access token is automatically added.
+  description: `Call any Feishu/Lark Open API. The app's tenant_access_token is automatically added.
+
+Usage: For APIs not covered by dedicated tools (lark_calendar_event, lark_task, etc.), use this generic tool.
 
 Common APIs:
-- GET /open-apis/docx/v1/documents/:id/raw_content — Read document content
-- GET /open-apis/search/v2/app?query=xxx — Search documents
-- GET /open-apis/sheets/v2/spreadsheets/:token/values/:range — Read spreadsheet
-- GET /open-apis/bitable/v1/apps/:app_token/tables/:table_id/records — Read bitable records
+- GET /open-apis/im/v1/messages — List messages
 - POST /open-apis/im/v1/messages — Send message
+- GET /open-apis/contact/v3/users/:user_id — Get user info
 
 Refer to Feishu Open API documentation for full API list.`,
   inputSchema: {
@@ -29,11 +34,11 @@ Refer to Feishu Open API documentation for full API list.`,
       },
       path: {
         type: 'string',
-        description: 'API path, e.g. /open-apis/docx/v1/documents/:id/raw_content',
+        description: 'API path, e.g. /open-apis/calendar/v4/calendars',
       },
       body: {
-        type: 'object',
-        description: 'JSON body for POST/PUT/PATCH requests (optional)',
+        type: 'string',
+        description: 'JSON body for POST requests (optional)',
       },
       params: {
         type: 'object',
@@ -45,17 +50,40 @@ Refer to Feishu Open API documentation for full API list.`,
   },
 };
 
+interface UserContext {
+  openId: string;
+  name: string;
+  chatId: string;
+  chatType: string;
+}
+
 export class LarkMcpServer {
   private appId: string;
   private appSecret: string;
   private apiBaseUrl: string;
-  private cachedToken = '';
-  private tokenExpiry = 0;
+  private sdkClient: lark.Client;
+  private userContext: UserContext;
 
   constructor(appId: string, appSecret: string, apiBaseUrl = 'https://open.feishu.cn') {
     this.appId = appId;
     this.appSecret = appSecret;
     this.apiBaseUrl = apiBaseUrl.replace(/\/+$/, '');
+
+    // SDK Client — automatically manages tenant_access_token
+    this.sdkClient = new lark.Client({
+      appId,
+      appSecret,
+      appType: lark.AppType.SelfBuild,
+      domain: this.apiBaseUrl as any,
+    });
+
+    // Read user context from environment (set by gateway at session startup)
+    this.userContext = {
+      openId: process.env.MLB_SENDER_OPEN_ID || '',
+      name: process.env.MLB_SENDER_NAME || '',
+      chatId: process.env.MLB_CHAT_ID || '',
+      chatType: process.env.MLB_CHAT_TYPE || '',
+    };
   }
 
   async run(): Promise<void> {
@@ -89,7 +117,7 @@ export class LarkMcpServer {
           result: {
             protocolVersion: '2024-11-05',
             capabilities: { tools: {} },
-            serverInfo: { name: 'lark', version: '1.0.0' },
+            serverInfo: { name: 'lark', version: '2.0.0' },
           },
         };
 
@@ -97,7 +125,14 @@ export class LarkMcpServer {
         return { result: {} };
 
       case 'tools/list':
-        return { result: { tools: [TOOL_DEFINITION] } };
+        return {
+          result: {
+            tools: [
+              TOOL_DEFINITION,
+              ...ALL_TOOLS.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
+            ],
+          },
+        };
 
       case 'tools/call':
         return this.handleToolCall(req.params as Record<string, unknown>);
@@ -109,77 +144,114 @@ export class LarkMcpServer {
 
   private async handleToolCall(params: Record<string, unknown>): Promise<Record<string, unknown>> {
     const toolName = params?.name as string;
-    if (toolName !== 'lark_api') {
-      return { error: { code: -32602, message: `Unknown tool: ${toolName}` } };
+    const args = (params?.arguments || {}) as Record<string, unknown>;
+
+    if (toolName === 'lark_api') {
+      return this.handleLarkApi(args);
     }
 
-    const args = (params?.arguments || {}) as Record<string, unknown>;
+    if (MCP_DOC_TOOL_NAMES.has(toolName)) {
+      return this.handleMcpDoc(toolName, args);
+    }
+
+    if (OAPI_TOOL_NAMES.has(toolName)) {
+      return this.handleOapiTool(toolName, args);
+    }
+
+    return { error: { code: -32602, message: `Unknown tool: ${toolName}` } };
+  }
+
+  // --- lark_api: generic SDK request ---
+
+  private async handleLarkApi(args: Record<string, unknown>): Promise<Record<string, unknown>> {
     const method = (args.method as string || 'GET').toUpperCase();
     const path = args.path as string;
-    const body = args.body as Record<string, unknown> | undefined;
+    const body = typeof args.body === 'string' ? JSON.parse(args.body) : args.body as Record<string, unknown> | undefined;
     const queryParams = args.params as Record<string, string> | undefined;
 
     if (!path) {
-      return {
-        result: {
-          content: [{ type: 'text', text: 'Error: path is required' }],
-          isError: true,
-        },
-      };
+      return { result: { content: [{ type: 'text', text: 'Error: path is required' }], isError: true } };
     }
 
-    // Audit log: record every API call for security visibility
-    console.error(`[lark-mcp] API call: ${method} ${path}${body ? ' (with body)' : ''}`);
+    // Path-based token mode detection for lark_api
+    let tokenMode: TokenMode = 'auto'; // default
+    if (path) {
+      // IM message send/reply/update — always TAT (bot identity)
+      if (/\/im\/v1\/messages/.test(path) && (method === 'POST' || method === 'PUT' || method === 'PATCH')) {
+        tokenMode = 'tenant';
+      }
+      // Bot info — always TAT
+      if (/\/bot\/v3\/info/.test(path)) {
+        tokenMode = 'tenant';
+      }
+      // Message recall — always TAT (can only recall bot's own messages)
+      if (/\/im\/v1\/messages\/.*\/delete/.test(path) && method === 'DELETE') {
+        tokenMode = 'tenant';
+      }
+    }
+
+    console.error(`[lark-mcp] API call: ${method} ${path} tokenMode=${tokenMode}${body ? ' (with body)' : ''}`);
 
     try {
-      const token = await this.resolveToken();
-      const url = new URL(`${this.apiBaseUrl}${path}`);
-      if (queryParams) {
-        for (const [k, v] of Object.entries(queryParams)) {
-          url.searchParams.set(k, v);
+      const opts = await this.resolveRequestOptionsForMode(tokenMode);
+      const result = await this.sdkClient.request({
+        method: method as any,
+        url: path,
+        data: body,
+        params: queryParams,
+      }, opts);
+      return { result: { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] } };
+    } catch (err) {
+      if (err instanceof MlbMcpError) {
+        return { result: { content: [{ type: 'text', text: JSON.stringify(err.toToolResult(), null, 2) }], isError: true } };
+      }
+      const structured = this.detectAuthError(err, 'lark_api');
+      if (structured) {
+        return { result: { content: [{ type: 'text', text: JSON.stringify(structured, null, 2) }], isError: true } };
+      }
+      return { result: { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true } };
+    }
+  }
+
+  // --- OAPI dedicated tools: SDK typed methods ---
+
+  private async handleOapiTool(toolName: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const action = args.action as string | undefined;
+    const tokenMode = resolveTokenMode(toolName, action);
+    console.error(`[lark-mcp] OAPI tool: ${toolName} action=${action ?? 'N/A'} tokenMode=${tokenMode}`);
+
+    try {
+      // Scope pre-check for user/auto mode
+      if (tokenMode === 'user' || tokenMode === 'auto') {
+        const requiredScopes = getRequiredScopes(toolName, action);
+        if (requiredScopes.length > 0) {
+          const userScopes = await this.getUserGrantedScopes();
+          if (userScopes !== null) { // null = no token, will be caught by resolveRequestOptionsForMode
+            const missing = requiredScopes.filter(s => !userScopes.has(s));
+            if (missing.length > 0) {
+              throw new UserScopeInsufficientError(`${toolName}.${action ?? 'default'}`, missing);
+            }
+          }
         }
       }
 
-      const fetchOpts: RequestInit = {
-        method,
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json; charset=utf-8',
-        },
-      };
-
-      if (body && ['POST', 'PUT', 'PATCH'].includes(method)) {
-        fetchOpts.body = JSON.stringify(body);
-      }
-
-      const resp = await fetch(url.toString(), fetchOpts);
-      const text = await resp.text();
-
-      // Check for token expiration and retry
-      let resultText = text;
-      try {
-        const json = JSON.parse(text);
-        const code = json?.code;
-        if ([99991663, 99991664, 99991668, 99991677].includes(code) || resp.status === 401) {
-          console.error(`[lark-mcp] token rejected (code=${code}), retrying with fresh token`);
-          this.cachedToken = '';
-          this.tokenExpiry = 0;
-          const freshToken = await this.resolveToken();
-          const retryOpts = {
-            ...fetchOpts,
-            headers: { ...fetchOpts.headers as Record<string, string>, 'Authorization': `Bearer ${freshToken}` },
-          };
-          const retryResp = await fetch(url.toString(), retryOpts);
-          resultText = await retryResp.text();
-        }
-      } catch { /* not JSON, use as-is */ }
-
+      const opts = await this.resolveRequestOptionsForMode(tokenMode);
+      const result = await executeOapiTool(this.sdkClient, toolName, args, opts);
       return {
         result: {
-          content: [{ type: 'text', text: resultText }],
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         },
       };
     } catch (err) {
+      // Check for structured MCP errors
+      if (err instanceof MlbMcpError) {
+        return { result: { content: [{ type: 'text', text: JSON.stringify(err.toToolResult(), null, 2) }], isError: true } };
+      }
+      // Check for runtime auth error codes
+      const structured = this.detectAuthError(err, toolName, action);
+      if (structured) {
+        return { result: { content: [{ type: 'text', text: JSON.stringify(structured, null, 2) }], isError: true } };
+      }
       return {
         result: {
           content: [{ type: 'text', text: `Error: ${(err as Error).message}` }],
@@ -189,36 +261,244 @@ export class LarkMcpServer {
     }
   }
 
-  private async resolveToken(): Promise<string> {
-    // Return cached token if still valid
-    if (this.cachedToken && Date.now() < this.tokenExpiry) {
-      return this.cachedToken;
+  // --- MCP Doc relay tools: HTTP to mcp.feishu.cn ---
+
+  private async handleMcpDoc(toolName: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const uat = await this.resolveUatForMcpDoc();
+    if (!uat) {
+      return {
+        result: {
+          content: [{ type: 'text', text: 'MCP Doc 工具需要用户授权。请先执行 /auth 完成飞书 OAuth 授权。' }],
+          isError: true,
+        },
+      };
     }
 
-    // Fetch new tenant token
+    // Map tool name to MCP tool name: lark_fetch_doc -> fetch-doc, lark_create_doc -> create-doc, lark_update_doc -> update-doc
+    const mcpToolName = toolName.replace(/^lark_/, '').replace(/_/g, '-');
+    const endpoint = process.env.FEISHU_MCP_ENDPOINT?.trim() || 'https://mcp.feishu.cn/mcp';
+
+    const body = {
+      jsonrpc: '2.0',
+      id: `mlb-${Date.now()}`,
+      method: 'tools/call',
+      params: {
+        name: mcpToolName,
+        arguments: args,
+      },
+    };
+
+    console.error(`[lark-mcp] MCP Doc: ${mcpToolName} → ${endpoint}`);
+
     try {
-      const resp = await fetch(
-        `${this.apiBaseUrl}/open-apis/auth/v3/tenant_access_token/internal`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ app_id: this.appId, app_secret: this.appSecret }),
-          signal: AbortSignal.timeout(5000),
+      const resp = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Lark-MCP-UAT': uat,
+          'X-Lark-MCP-Allowed-Tools': mcpToolName,
         },
-      );
-      const data = (await resp.json()) as { tenant_access_token?: string; expire?: number };
-      const token = data.tenant_access_token;
-      if (!token) {
-        throw new Error('Failed to get tenant_access_token');
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(120_000), // 2 min timeout for large docs
+      });
+
+      const text = await resp.text();
+      if (!resp.ok) {
+        return {
+          result: {
+            content: [{ type: 'text', text: `MCP HTTP ${resp.status}: ${text.slice(0, 4000)}` }],
+            isError: true,
+          },
+        };
       }
 
-      this.cachedToken = token;
-      // Expire 100s before actual expiry (default 2h = 7200s)
-      this.tokenExpiry = Date.now() + ((data.expire || 7200) - 100) * 1000;
-      return token;
+      let data: any;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        return {
+          result: {
+            content: [{ type: 'text', text: `MCP returned non-JSON: ${text.slice(0, 4000)}` }],
+            isError: true,
+          },
+        };
+      }
+
+      // Unwrap JSON-RPC result
+      const unwrapped = this.unwrapJsonRpc(data);
+      if (unwrapped.error) {
+        return {
+          result: {
+            content: [{ type: 'text', text: `MCP error: ${unwrapped.error}` }],
+            isError: true,
+          },
+        };
+      }
+
+      // Forward MCP content directly if available
+      if (unwrapped.result?.content && Array.isArray(unwrapped.result.content)) {
+        return { result: { content: unwrapped.result.content } };
+      }
+
+      return {
+        result: {
+          content: [{ type: 'text', text: JSON.stringify(unwrapped.result, null, 2) }],
+        },
+      };
     } catch (err) {
-      console.error(`[lark-mcp] resolveToken failed:`, (err as Error).message);
-      throw new Error(`Token fetch failed: ${(err as Error).message}`);
+      return {
+        result: {
+          content: [{ type: 'text', text: `MCP Doc error: ${(err as Error).message}` }],
+          isError: true,
+        },
+      };
     }
+  }
+
+  /** Unwrap nested JSON-RPC envelopes (same as feishu-openclaw shared.js) */
+  private unwrapJsonRpc(data: any): { result?: any; error?: string } {
+    if (typeof data !== 'object' || data === null) return { result: data };
+
+    if (data.error) {
+      const msg = typeof data.error === 'object' ? data.error.message : String(data.error);
+      return { error: `${data.error.code ?? ''}: ${msg}` };
+    }
+
+    if (data.result !== undefined) {
+      // Recursive unwrap
+      if (typeof data.result === 'object' && data.result?.jsonrpc) {
+        return this.unwrapJsonRpc(data.result);
+      }
+      return { result: data.result };
+    }
+
+    return { result: data };
+  }
+
+  // --- Token management ---
+
+  /** Per-user refresh lock: only one refresh at a time */
+  private refreshPromise: Promise<string | null> | null = null;
+
+  /**
+   * Shared UAT resolution: load -> validate -> refresh -> return string or null.
+   * Includes per-user refresh lock to prevent concurrent refresh_token consumption.
+   */
+  private async resolveUat(): Promise<string | null> {
+    const workspace = process.env.MLB_WORKSPACE;
+    if (!workspace) return null;
+
+    try {
+      const { loadTokens, isTokenValid } = await import('./auth/token-store.js');
+      const tokens = loadTokens(workspace);
+      if (tokens) {
+        if (isTokenValid(tokens)) {
+          return tokens.user_access_token;
+        }
+        if (tokens.refresh_token) {
+          // Per-user refresh lock: only one refresh at a time
+          if (this.refreshPromise) {
+            console.error('[lark-mcp] waiting for concurrent refresh to complete');
+            return this.refreshPromise;
+          }
+
+          this.refreshPromise = this.doRefreshToken(workspace, tokens.refresh_token);
+          try {
+            return await this.refreshPromise;
+          } finally {
+            this.refreshPromise = null;
+          }
+        }
+      }
+    } catch { /* no user token */ }
+
+    return null;
+  }
+
+  private async doRefreshToken(workspace: string, refreshToken: string): Promise<string | null> {
+    try {
+      const { refreshUserToken } = await import('./auth/oauth.js');
+      const { saveTokens } = await import('./auth/token-store.js');
+      const newTokens = await refreshUserToken(
+        this.appId, this.appSecret, refreshToken, this.apiBaseUrl
+      );
+      saveTokens(workspace, newTokens);
+      console.error('[lark-mcp] refreshed user_access_token');
+      return newTokens.user_access_token;
+    } catch (err) {
+      console.error('[lark-mcp] token refresh failed:', (err as Error).message);
+      return null;
+    }
+  }
+
+  /**
+   * Resolve request options based on token mode.
+   *
+   * - 'user':   Must use UAT. If not available, throw UserAuthRequiredError.
+   * - 'tenant': Use SDK default TAT (return undefined).
+   * - 'auto':   Use UAT if available, otherwise TAT.
+   */
+  private async resolveRequestOptionsForMode(mode: TokenMode): Promise<ReturnType<typeof lark.withUserAccessToken> | undefined> {
+    if (mode === 'tenant') {
+      return undefined; // SDK default = TAT
+    }
+
+    const uat = await this.resolveUat();
+
+    if (mode === 'user' && !uat) {
+      throw new UserAuthRequiredError('(per-tool UAT required)');
+    }
+
+    return uat ? lark.withUserAccessToken(uat) : undefined;
+  }
+
+  /**
+   * Returns raw UAT string for MCP Doc relay (needs HTTP header, not SDK opts).
+   */
+  private async resolveUatForMcpDoc(): Promise<string | null> {
+    return this.resolveUat();
+  }
+
+  /**
+   * Get user's granted scopes from stored token data.
+   * Returns null if no token is available (scope check should be skipped).
+   */
+  private async getUserGrantedScopes(): Promise<Set<string> | null> {
+    const workspace = process.env.MLB_WORKSPACE;
+    if (!workspace) return null;
+
+    try {
+      const { loadTokens } = await import('./auth/token-store.js');
+      const tokens = loadTokens(workspace);
+      if (!tokens?.scope) return null;
+      return new Set(tokens.scope.split(/\s+/).filter(Boolean));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Detect Feishu auth error codes and convert to structured errors.
+   */
+  private detectAuthError(err: unknown, toolName: string, action?: string): Record<string, unknown> | null {
+    const code = (err as any)?.code ?? (err as any)?.response?.data?.code;
+
+    if (code === 99991672) {
+      // App scope missing — admin must enable on open.feishu.cn
+      return new AppScopeMissingError([], this.appId).toToolResult();
+    }
+
+    if (code === 99991679) {
+      // User scope insufficient — need incremental OAuth
+      const requiredScopes = getRequiredScopes(toolName, action);
+      return new UserScopeInsufficientError(`${toolName}.${action ?? 'default'}`, requiredScopes).toToolResult();
+    }
+
+    if (code === 99991668 || code === 99991669 || code === 99991671) {
+      // Token expired/invalid — need re-auth
+      return new UserAuthRequiredError(`${toolName}.${action ?? 'default'}`).toToolResult();
+    }
+
+    return null;
   }
 }

@@ -1,6 +1,6 @@
 import * as lark from '@larksuiteoapi/node-sdk';
 import type { Readable } from 'node:stream';
-import type { ImageAttachment } from './types.js';
+import type { ImageAttachment, SenderInfo } from './types.js';
 
 export class FeishuClient {
   private client: lark.Client;
@@ -21,8 +21,8 @@ export class FeishuClient {
   // --- WebSocket connection ---
 
   async start(
-    onMessage: (content: string, images: ImageAttachment[], chatId: string, messageId: string) => void,
-    onCardAction: (action: string, chatId: string, userId: string) => any,
+    onMessage: (content: string, images: ImageAttachment[], chatId: string, messageId: string, senderInfo: SenderInfo) => void,
+    onCardAction: (action: string, chatId: string, userId: string, actionValue?: Record<string, unknown>) => any,
   ): Promise<void> {
     const eventDispatcher = new lark.EventDispatcher({}).register({
       'im.message.receive_v1': (data) => {
@@ -48,11 +48,21 @@ export class FeishuClient {
 
   private async onMessage(
     data: any,
-    handler: (content: string, images: ImageAttachment[], chatId: string, messageId: string) => void,
+    handler: (content: string, images: ImageAttachment[], chatId: string, messageId: string, senderInfo: SenderInfo) => void,
   ): Promise<void> {
     const sender = data.sender;
     const message = data.message;
     const messageType = message.message_type;
+
+    // ── 过期消息过滤 ──
+    // 飞书可能重试之前未确认的消息。超过 10 分钟的消息静默丢弃。
+    const STALE_THRESHOLD_MS = 10 * 60 * 1000;
+    let createTimeMs = parseInt(message.create_time, 10);
+    if (createTimeMs && createTimeMs < 1e12) createTimeMs *= 1000; // 兼容秒级时间戳
+    if (createTimeMs && (Date.now() - createTimeMs) > STALE_THRESHOLD_MS) {
+      console.log(`[feishu] dropping stale message: age=${Math.round((Date.now() - createTimeMs) / 1000)}s, message_id=${message.message_id}`);
+      return;
+    }
 
     console.log(`[feishu] received message_type=${messageType}`);
 
@@ -110,31 +120,36 @@ export class FeishuClient {
     if (message.mentions?.length) {
       for (const mention of message.mentions) {
         content = content.replace(`@_user_${mention.id?.open_id}`, '').trim();
-        content = content.replace(new RegExp(`@${mention.name}`, 'g'), '').trim();
+        content = content.replaceAll(`@${mention.name}`, '').trim();
       }
     }
 
     if (!content.trim() && images.length === 0) return;
 
     const chatId = message.chat_id;
-    handler(content.trim(), images, chatId, message.message_id);
+    const senderInfo: SenderInfo = {
+      openId: sender?.sender_id?.open_id || '',
+      name: sender?.sender_id?.name || undefined,
+      chatType: (message.chat_type as 'p2p' | 'group') || 'group',
+    };
+    handler(content.trim(), images, chatId, message.message_id, senderInfo);
   }
 
   private onCardAction(
     data: any,
-    handler: (action: string, chatId: string, userId: string) => any,
+    handler: (action: string, chatId: string, userId: string, actionValue?: Record<string, unknown>) => any,
   ): any {
     const event = data?.event || data;
     const action = event?.action;
     if (!action?.value) return {};
 
-    const actionValue = action.value.action as string;
+    const actionStr = action.value.action as string;
     const openId = event.operator?.open_id || '';
     const chatId = event.context?.open_chat_id || event.context?.chat_id || '';
 
-    console.log(`[feishu] card action: ${actionValue} from user=${openId} chat=${chatId}`);
+    console.log(`[feishu] card action: ${actionStr} from user=${openId} chat=${chatId}`);
 
-    return handler(actionValue, chatId, openId);
+    return handler(actionStr, chatId, openId, action.value);
   }
 
   // --- Image download ---
@@ -211,6 +226,14 @@ export class FeishuClient {
         msg_type: 'text',
       },
     });
+  }
+
+  /** Add a reaction emoji to a message (fire-and-forget) */
+  addReaction(messageId: string, emoji: string): void {
+    this.client.im.messageReaction.create({
+      path: { message_id: messageId },
+      data: { reaction_type: { emoji_type: emoji } },
+    }).catch(() => { /* best effort */ });
   }
 
   // --- Typing indicator (reaction emoji) ---

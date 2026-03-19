@@ -16,10 +16,15 @@ export class StreamPreview {
     config: { interval_ms: number; min_delta_chars: number; max_chars: number },
     feishu: FeishuClient,
     chatId: string,
+    existingMessageId?: string,
   ) {
     this.config = config;
     this.feishu = feishu;
     this.chatId = chatId;
+    // Reuse existing card (e.g. ThinkingCard) instead of creating a new message
+    if (existingMessageId) {
+      this.previewMessageId = existingMessageId;
+    }
   }
 
   appendText(text: string): void {
@@ -79,12 +84,6 @@ export class StreamPreview {
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
-    }
-    // Delete the preview message to avoid leaving a stale "generating..." card
-    if (this.previewMessageId) {
-      const msgId = this.previewMessageId;
-      this.previewMessageId = undefined;
-      this.feishu.deleteMessage(msgId).catch(() => { /* best effort */ });
     }
   }
 

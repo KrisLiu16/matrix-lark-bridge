@@ -6,6 +6,8 @@ export default defineConfig({
   main: {
     build: {
       outDir: 'dist/main',
+      // Bundle ALL deps into output (pnpm symlinks break in asar)
+      externalizeDeps: false,
       rollupOptions: {
         external: ['electron'],
       },
@@ -14,6 +16,7 @@ export default defineConfig({
   preload: {
     build: {
       outDir: 'dist/preload',
+      externalizeDeps: false,
     },
   },
   renderer: {

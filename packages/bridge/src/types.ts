@@ -13,6 +13,7 @@ export type EventType =
   | 'result'
   | 'error'
   | 'permission_request'
+  | 'permission_cancel'
   | 'thinking';
 
 export interface AgentEvent {
@@ -24,6 +25,16 @@ export interface AgentEvent {
   sessionId?: string;
   requestId?: string;
   isError?: boolean;
+  /** Token usage from result event */
+  usage?: TokenUsage;
+  totalCostUsd?: number;
+}
+
+export interface TokenUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreate: number;
 }
 
 // --- Permission ---
@@ -40,6 +51,14 @@ export interface ImageAttachment {
   mimeType: string;
   data: Buffer;
   fileName?: string;
+}
+
+// --- Sender info (from Feishu message event) ---
+
+export interface SenderInfo {
+  openId: string;
+  name?: string;
+  chatType: 'p2p' | 'group';
 }
 
 // --- MCP Server config ---

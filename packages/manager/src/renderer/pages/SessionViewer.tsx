@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import type { SessionState } from '@mlb/shared';
 import { useBridgeStore } from '../stores/bridge-store';
 import { useI18n } from '../i18n';
@@ -95,6 +95,11 @@ export default function SessionViewer({ name }: SessionViewerProps) {
             </div>
           </section>
 
+          {/* Conversation History */}
+          {session.history && session.history.length > 0 && (
+            <ConversationHistory history={session.history} />
+          )}
+
           {/* Tool Call History */}
           {session.steps.length > 0 && (
             <section className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5 shadow-sm">
@@ -116,6 +121,61 @@ export default function SessionViewer({ name }: SessionViewerProps) {
         </div>
       )}
     </div>
+  );
+}
+
+function ConversationHistory({ history }: { history: NonNullable<SessionState['history']> }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [history]);
+
+  function formatTimestamp(ts: string): string {
+    try {
+      const d = new Date(ts);
+      const day = d.getDate();
+      const h = String(d.getHours()).padStart(2, '0');
+      const m = String(d.getMinutes()).padStart(2, '0');
+      const s = String(d.getSeconds()).padStart(2, '0');
+      return `${day}日 ${h}:${m}:${s}`;
+    } catch {
+      return ts;
+    }
+  }
+
+  return (
+    <section className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5 shadow-sm">
+      <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-4">
+        Conversation ({history.length})
+      </h2>
+      <div ref={scrollRef} className="max-h-96 overflow-auto space-y-3 px-1">
+        {history.map((msg, i) => (
+          <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div
+              className={`max-w-[80%] rounded-xl px-3.5 py-2.5 text-xs leading-relaxed ${
+                msg.role === 'user'
+                  ? 'bg-blue-500 text-white rounded-br-sm'
+                  : 'bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-slate-200 rounded-bl-sm'
+              }`}
+            >
+              <div className="whitespace-pre-wrap break-words">{msg.content}</div>
+              <div
+                className={`text-[10px] mt-1.5 ${
+                  msg.role === 'user'
+                    ? 'text-blue-200'
+                    : 'text-slate-400 dark:text-slate-500'
+                }`}
+              >
+                {formatTimestamp(msg.timestamp)}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 

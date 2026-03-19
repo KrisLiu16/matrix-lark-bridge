@@ -8,6 +8,22 @@
  *   mlb-bridge mcp                                       (MCP server mode, env vars)
  */
 
+// Patch console to prepend timestamps (DD HH:mm:ss)
+const _origLog = console.log;
+const _origErr = console.error;
+const _origWarn = console.warn;
+function ts() {
+  const d = new Date();
+  const DD = String(d.getDate()).padStart(2, '0');
+  const HH = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  return `${DD} ${HH}:${mm}:${ss}`;
+}
+console.log = (...args: unknown[]) => _origLog(`[${ts()}]`, ...args);
+console.error = (...args: unknown[]) => _origErr(`[${ts()}]`, ...args);
+console.warn = (...args: unknown[]) => _origWarn(`[${ts()}]`, ...args);
+
 import { parseArgs } from 'node:util';
 
 const { values, positionals } = parseArgs({

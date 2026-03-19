@@ -263,7 +263,7 @@ export class BridgeProcessManager {
 
   // --- Logs ---
 
-  async getLogs(name: string, lines = 100): Promise<string[]> {
+  async getLogs(name: string, lines = 5000): Promise<string[]> {
     const logPath = join(WORKSPACE_ROOT, name, LOG_FILE);
     if (!existsSync(logPath)) return [];
 
@@ -370,8 +370,11 @@ export class BridgeProcessManager {
     // Check if running in packaged Electron app
     const { app } = require('electron');
     if (app.isPackaged) {
-      const resourcePath = join(process.resourcesPath, 'bridge', 'dist', 'index.js');
-      if (existsSync(resourcePath)) return resourcePath;
+      // Packaged: single-file ESM bundle (no node_modules needed)
+      for (const name of ['index.mjs', 'index.js']) {
+        const p = join(process.resourcesPath, 'bridge', 'dist', name);
+        if (existsSync(p)) return p;
+      }
     }
 
     // Development: try multiple strategies to find bridge/dist/index.js

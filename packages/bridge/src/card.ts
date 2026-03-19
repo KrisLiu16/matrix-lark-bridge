@@ -16,19 +16,20 @@ type ToolInput = Record<string, unknown>;
 const TOOL_ICON: Record<string, string> = {
   Read: 'file-link_outlined',
   Edit: 'edit_outlined',
-  Write: 'add-doc_outlined',
+  Write: 'richtext_outlined',
   Bash: 'code_outlined',
   Grep: 'search_outlined',
   Glob: 'search_outlined',
-  Agent: 'robot_outlined',
-  WebFetch: 'internet_outlined',
+  Agent: 'chat_outlined',
+  WebFetch: 'cloud_outlined',
   WebSearch: 'search_outlined',
   LSP: 'code_outlined',
-  Skill: 'app_outlined',
+  Skill: 'app-default_outlined',
   NotebookEdit: 'edit_outlined',
 };
 
 export function toolIcon(tool: string): string {
+  if (tool.startsWith('mcp__')) return 'cloud_outlined';
   return TOOL_ICON[tool] || 'setting_outlined';
 }
 
@@ -79,8 +80,18 @@ export function toolLabel(tool: string, input: ToolInput): string {
       return `SKILL ${str('skill')}`;
     case 'NotebookEdit':
       return `NOTEBOOK edit`;
-    default:
+    default: {
+      // MCP tools: mcp__server__tool_name → "LARK  method /path"
+      if (tool.startsWith('mcp__')) {
+        const parts = tool.split('__');
+        const server = parts[1] || '';
+        const method = str('method') || str('operation') || parts.slice(2).join('_');
+        const path = str('path') || str('url') || '';
+        const short = path.length > 40 ? path.slice(0, 40) + '…' : path;
+        return `${server.toUpperCase()}  ${method}${short ? ' ' + short : ''}`;
+      }
       return tool.toUpperCase();
+    }
   }
 }
 
@@ -95,7 +106,6 @@ const FILTERED = new Set([
   'TodoWrite',
   'EnterPlanMode',
   'ExitPlanMode',
-  'AskUserQuestion',
   'CronCreate',
   'CronDelete',
   'CronList',
@@ -104,7 +114,6 @@ const FILTERED = new Set([
 export function isFiltered(name: string): boolean {
   if (!name) return true;
   if (FILTERED.has(name)) return true;
-  if (name.startsWith('mcp__lark__lark_')) return true;
   return false;
 }
 
@@ -128,19 +137,21 @@ function makeHeader(opts: {
   title: string;
   subtitle?: string;
   template: string;
-  icon: string;
+  icon?: string;
   tags: Array<{ text: string; color: string }>;
 }): CardHeader {
   const header: CardHeader = {
     title: { tag: 'plain_text', content: opts.title },
     template: opts.template,
-    icon: { tag: 'standard_icon', token: opts.icon },
     text_tag_list: opts.tags.map((t): TagItem => ({
       tag: 'text_tag',
       text: { tag: 'plain_text', content: t.text },
       color: t.color,
     })),
   };
+  if (opts.icon) {
+    header.icon = { tag: 'standard_icon', token: opts.icon };
+  }
   if (opts.subtitle) {
     header.subtitle = { tag: 'plain_text', content: opts.subtitle };
   }
@@ -153,7 +164,7 @@ function stepToDiv(step: StepInfo) {
     icon: {
       tag: 'standard_icon',
       token: toolIcon(step.tool),
-      color: TOOL_COLOR[step.tool] || 'grey',
+      color: TOOL_COLOR[step.tool] || (step.tool.startsWith('mcp__') ? 'turquoise' : 'grey'),
     },
     text: {
       tag: 'plain_text',
@@ -162,7 +173,7 @@ function stepToDiv(step: StepInfo) {
   };
 }
 
-function makeCollapsiblePanel(content: string, label: string, iconToken = 'info_outlined') {
+function makeCollapsiblePanel(content: string, label: string, iconToken = 'down-small-ccm_outlined') {
   return {
     tag: 'collapsible_panel',
     expanded: false,
@@ -232,7 +243,6 @@ export function buildThinkingCard(prompt: string, botName = 'MiniMax AI') {
           icon: { tag: 'standard_icon', token: 'chat_outlined', color: 'blue' },
           text: { tag: 'plain_text', content: short },
         },
-        { tag: 'markdown', content: `<font color='grey'>waiting for first action…</font>` },
       ],
     },
   };
@@ -270,7 +280,7 @@ export function buildWorkingCard(
       title: botName,
       subtitle: `${stepCount} steps · ${elapsed}`,
       template: 'indigo',
-      icon: currentTool ? toolIcon(currentTool) : 'loop_outlined',
+      icon: 'loading_outlined',
       tags: [{ text: '执行中', color: 'blue' }],
     }),
     body: { elements },
@@ -314,7 +324,7 @@ export function buildDoneCard(
       ? thinking.slice(0, 1500) + '\n\n…(truncated)'
       : thinking;
     if (truncated) elements.push({ tag: 'hr' });
-    elements.push(makeCollapsiblePanel(thinkTrunc, 'Thinking', 'thought_outlined'));
+    elements.push(makeCollapsiblePanel(thinkTrunc, 'Thinking'));
   }
 
   if (allSteps.length > 0) {
@@ -333,16 +343,24 @@ export function buildDoneCard(
 
   return {
     schema: '2.0',
-    config: { wide_screen_mode: true },
+    config: { wide_screen_mode: true, streaming_mode: false },
     header: makeHeader({
       title: botName,
-      subtitle: `${stepCount} steps · ${elapsed}`,
       template: 'green',
-      icon: 'chat_outlined',
       tags,
     }),
     body: { elements },
   };
+}
+
+/** Format current time as MM-DD HH:mm */
+export function nowTimestamp(): string {
+  const d = new Date();
+  const MM = String(d.getMonth() + 1).padStart(2, '0');
+  const DD = String(d.getDate()).padStart(2, '0');
+  const HH = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${MM}-${DD} ${HH}:${mm}`;
 }
 
 /** Permission request card with Allow/Always Allow/Deny buttons */
@@ -358,25 +376,38 @@ export function buildPermissionCard(toolName: string, toolInput?: string) {
 
   elements.push({ tag: 'hr' });
   elements.push({
-    tag: 'action',
-    actions: [
+    tag: 'column_set',
+    flex_mode: 'flow',
+    columns: [
       {
-        tag: 'button',
-        text: { tag: 'plain_text', content: 'Allow' },
-        type: 'primary',
-        value: { action: 'permission_allow' },
+        tag: 'column',
+        width: 'auto',
+        elements: [{
+          tag: 'button',
+          text: { tag: 'plain_text', content: 'Allow' },
+          type: 'primary',
+          value: { action: 'permission_allow' },
+        }],
       },
       {
-        tag: 'button',
-        text: { tag: 'plain_text', content: 'Always Allow' },
-        type: 'default',
-        value: { action: 'permission_always_allow' },
+        tag: 'column',
+        width: 'auto',
+        elements: [{
+          tag: 'button',
+          text: { tag: 'plain_text', content: 'Always Allow' },
+          type: 'default',
+          value: { action: 'permission_always_allow' },
+        }],
       },
       {
-        tag: 'button',
-        text: { tag: 'plain_text', content: 'Deny' },
-        type: 'danger',
-        value: { action: 'permission_deny' },
+        tag: 'column',
+        width: 'auto',
+        elements: [{
+          tag: 'button',
+          text: { tag: 'plain_text', content: 'Deny' },
+          type: 'danger',
+          value: { action: 'permission_deny' },
+        }],
       },
     ],
   });
@@ -387,24 +418,64 @@ export function buildPermissionCard(toolName: string, toolInput?: string) {
     header: makeHeader({
       title: '🔐 Permission Request',
       template: 'orange',
-      icon: 'key_outlined',
+      icon: 'safe_outlined',
       tags: [{ text: '待审批', color: 'orange' }],
     }),
     body: { elements },
   };
 }
 
-/** Permission result card — replaces the permission card after action.
- *  Uses the OLD card format (config + top-level elements) because Feishu
- *  card action callback returns expect this format, not card JSON 2.0. */
+/** Permission result card — replaces the permission card after action (V2 format). */
 export function buildPermissionResultCard(allowed: boolean, alwaysAllow = false) {
   const label = alwaysAllow
     ? '✅ **Always Allowed**'
     : allowed ? '✅ **Allowed**, continuing...' : '❌ **Denied**';
+  const color = allowed ? 'green' : 'red';
 
   return {
-    config: { update_multi: true },
-    elements: [{ tag: 'markdown', content: label }],
+    schema: '2.0',
+    config: { wide_screen_mode: true },
+    header: {
+      title: { tag: 'plain_text', content: allowed ? 'Allowed' : 'Denied' },
+      template: color,
+    },
+    body: {
+      elements: [{ tag: 'markdown', content: label }],
+    },
+  };
+}
+
+/** Auth card — OAuth authorization with button */
+export function buildAuthCard(authUrl: string) {
+  return {
+    schema: '2.0',
+    config: { wide_screen_mode: true },
+    header: makeHeader({
+      title: '飞书授权',
+      template: 'blue',
+      icon: 'safe_outlined',
+      tags: [{ text: '待授权', color: 'blue' }],
+    }),
+    body: {
+      elements: [
+        { tag: 'markdown', content: '点击下方按钮完成飞书账号授权，授权后 AI 可使用个人身份访问飞书文档、日程等。' },
+        {
+          tag: 'column_set',
+          flex_mode: 'flow',
+          columns: [{
+            tag: 'column',
+            width: 'auto',
+            elements: [{
+              tag: 'button',
+              text: { tag: 'plain_text', content: '前往授权' },
+              type: 'primary',
+              multi_url: { url: authUrl },
+            }],
+          }],
+        },
+        { tag: 'markdown', content: `<font color='grey'>点击授权后自动完成，无需复制任何内容。链接 5 分钟内有效。</font>` },
+      ],
+    },
   };
 }
 
@@ -415,6 +486,114 @@ export function buildMarkdownCard(content: string) {
     config: { wide_screen_mode: true },
     body: {
       elements: [{ tag: 'markdown', content }],
+    },
+  };
+}
+
+/**
+ * Build a compact notice card with colored header.
+ * @param title - Header title text
+ * @param content - Markdown body (optional)
+ * @param color - Header color: 'blue' | 'green' | 'red' | 'orange' | 'grey' | 'indigo'
+ */
+export function buildNoticeCard(
+  title: string,
+  content?: string,
+  color: 'blue' | 'green' | 'red' | 'orange' | 'grey' | 'indigo' = 'blue',
+) {
+  return {
+    schema: '2.0',
+    config: { wide_screen_mode: true },
+    header: {
+      title: { tag: 'plain_text', content: title },
+      template: color,
+    },
+    body: {
+      elements: [{ tag: 'markdown', content: content || ' ' }],
+    },
+  };
+}
+
+/**
+ * Build an interactive question card for AskUserQuestion tool.
+ * If options are provided, render as clickable buttons.
+ * Otherwise render a prompt asking user to type their answer.
+ */
+export function buildAskUserCard(
+  question: string,
+  options?: string[],
+) {
+  const elements: unknown[] = [
+    { tag: 'markdown', content: question },
+  ];
+
+  if (options && options.length > 0) {
+    elements.push({ tag: 'hr' });
+    for (const [i, opt] of options.entries()) {
+      elements.push({
+        tag: 'column_set',
+        flex_mode: 'none',
+        columns: [{
+          tag: 'column',
+          width: 'weighted',
+          weight: 1,
+          elements: [{
+            tag: 'button',
+            text: { tag: 'plain_text', content: opt },
+            type: i === 0 ? 'primary' : 'default',
+            value: { action: 'ask_user_answer', answer: opt },
+          }],
+        }],
+      });
+    }
+    elements.push({
+      tag: 'markdown',
+      content: `<font color='grey'>或直接回复消息输入自定义内容</font>`,
+    });
+  } else {
+    elements.push({
+      tag: 'markdown',
+      content: `<font color='grey'>请直接回复消息来回答</font>`,
+    });
+  }
+
+  return {
+    schema: '2.0',
+    config: { wide_screen_mode: true },
+    header: makeHeader({
+      title: '需要你的输入',
+      template: 'blue',
+      icon: 'chat_outlined',
+      tags: [{ text: '待回答', color: 'blue' }],
+    }),
+    body: { elements },
+  };
+}
+
+/**
+ * Build a compact usage card showing token consumption.
+ * NOTE: costUsd intentionally not displayed — do not add it back.
+ */
+export function buildUsageCard(
+  usage: { input: number; output: number; cacheRead: number; cacheCreate: number },
+  _costUsd?: number,
+) {
+  const formatK = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+
+  const md = `<text_tag color='blue'>Input ${formatK(usage.input)}</text_tag>  <text_tag color='turquoise'>Cache ${formatK(usage.cacheRead)}</text_tag>  <text_tag color='violet'>Output ${formatK(usage.output)}</text_tag>`;
+
+  return {
+    schema: '2.0',
+    config: { wide_screen_mode: true },
+    body: {
+      padding: '12px 20px 12px 20px',
+      elements: [
+        {
+          tag: 'div',
+          icon: { tag: 'standard_icon', token: 'sheet-iconsets-stable_filled', color: 'grey' },
+          text: { tag: 'lark_md', content: md },
+        },
+      ],
     },
   };
 }

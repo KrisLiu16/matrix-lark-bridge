@@ -27,7 +27,9 @@ export class FeishuSetup {
     });
 
     const deviceCode = beginData.device_code;
-    const verificationUrl = beginData.verification_uri_complete;
+    const verificationUrl = beginData.verification_uri_complete
+      ? `${beginData.verification_uri_complete}&from=maxclaw`
+      : '';
     const expiresIn = beginData.expires_in || 300;
 
     if (!deviceCode || !verificationUrl) {

@@ -6,12 +6,46 @@ interface LogViewerProps {
   name: string;
 }
 
+type LogLevel = 'ALL' | 'ERROR' | 'WARN' | 'INFO' | 'TOOL';
+
+const LOG_LEVEL_FILTERS: Record<LogLevel, (line: string) => boolean> = {
+  ALL: () => true,
+  ERROR: (line) => /error|ERR/i.test(line),
+  WARN: (line) => /warn|\[warn\]/i.test(line),
+  INFO: (line) => /\[info\]|\[gateway\]|\[feishu\]|\[claudecode\]|\[config\]/i.test(line),
+  TOOL: (line) => /\[gateway\] tool:/i.test(line),
+};
+
+const LOG_LEVEL_STYLES: Record<LogLevel, { active: string; inactive: string }> = {
+  ALL: {
+    active: 'bg-slate-600 text-white',
+    inactive: 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600',
+  },
+  ERROR: {
+    active: 'bg-red-600 text-white',
+    inactive: 'bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/50',
+  },
+  WARN: {
+    active: 'bg-amber-500 text-white',
+    inactive: 'bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/50',
+  },
+  INFO: {
+    active: 'bg-blue-600 text-white',
+    inactive: 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/50',
+  },
+  TOOL: {
+    active: 'bg-emerald-600 text-white',
+    inactive: 'bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/50',
+  },
+};
+
 export default function LogViewer({ name }: LogViewerProps) {
   const { navigate } = useBridgeStore();
   const { t } = useI18n();
   const [lines, setLines] = useState<string[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [filter, setFilter] = useState('');
+  const [logLevel, setLogLevel] = useState<LogLevel>('ALL');
   const [autoScroll, setAutoScroll] = useState(true);
   const [loading, setLoading] = useState(true);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -44,7 +78,7 @@ export default function LogViewer({ name }: LogViewerProps) {
   async function loadLogs() {
     try {
       setLoading(true);
-      const logLines = await window.mlb.bridge.logs(name, 200);
+      const logLines = await window.mlb.bridge.logs(name, 5000);
       setLines(logLines);
     } catch (err) {
       setLines([`Error loading logs: ${(err as Error).message}`]);
@@ -76,9 +110,11 @@ export default function LogViewer({ name }: LogViewerProps) {
     }
   }
 
-  const filteredLines = filter
-    ? lines.filter((line) => line.toLowerCase().includes(filter.toLowerCase()))
-    : lines;
+  const filteredLines = lines.filter((line) => {
+    if (!LOG_LEVEL_FILTERS[logLevel](line)) return false;
+    if (filter && !line.toLowerCase().includes(filter.toLowerCase())) return false;
+    return true;
+  });
 
   return (
     <div className="h-full flex flex-col animate-fade-in">
@@ -98,6 +134,23 @@ export default function LogViewer({ name }: LogViewerProps) {
           )}
         </div>
         <div className="flex items-center gap-2">
+          {/* Log level filter buttons */}
+          <div className="flex items-center gap-0.5 bg-slate-100 dark:bg-slate-700/50 rounded-lg p-0.5">
+            {(Object.keys(LOG_LEVEL_STYLES) as LogLevel[]).map((level) => (
+              <button
+                key={level}
+                onClick={() => setLogLevel(level)}
+                className={`px-2 py-0.5 text-xs font-medium rounded-md transition-colors ${
+                  logLevel === level
+                    ? LOG_LEVEL_STYLES[level].active
+                    : LOG_LEVEL_STYLES[level].inactive
+                }`}
+              >
+                {level}
+              </button>
+            ))}
+          </div>
+          <div className="w-px h-4 bg-slate-300 dark:bg-slate-600" />
           <div className="relative">
             <svg className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
@@ -179,8 +232,9 @@ function colorize(line: string): React.ReactNode {
   const parts: React.ReactNode[] = [];
   let remaining = line;
 
-  // Extract timestamp (ISO-like or HH:MM:SS patterns)
-  const tsMatch = remaining.match(/^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\s*/);
+  // Extract timestamp — ISO format or [DD HH:mm:ss] format
+  const tsMatch = remaining.match(/^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\s*/)
+    || remaining.match(/^(\[\d{2} \d{2}:\d{2}:\d{2}\])\s*/);
   if (tsMatch) {
     parts.push(<span key="ts" className="text-slate-600">{tsMatch[1]}</span>);
     remaining = remaining.slice(tsMatch[0].length);

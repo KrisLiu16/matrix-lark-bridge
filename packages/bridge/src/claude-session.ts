@@ -1,8 +1,9 @@
 import { spawn, execSync, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
+import { randomBytes } from 'node:crypto';
 import type { AgentEvent, PermissionResult, ImageAttachment, McpServerConfig } from './types.js';
 
 function findExecutable(name: string): string {
@@ -54,6 +55,7 @@ export class ClaudeSession {
   private pendingInputs = new Map<string, Record<string, unknown>>(); // requestId → original tool input
   private eventBuffer: AgentEvent[] = [];
   private buffering = true;
+  private mcpConfigPath: string | null = null;
 
   constructor(opts: ClaudeSessionOptions, callbacks: ClaudeSessionCallbacks) {
     this.opts = opts;
@@ -106,10 +108,13 @@ export class ClaudeSession {
 
     if (this.opts.mcpServers && Object.keys(this.opts.mcpServers).length > 0) {
       try {
-        const mcpConfig = JSON.stringify({ mcpServers: this.opts.mcpServers });
-        args.push('--mcp-config', mcpConfig);
+        // Write MCP config to a temp file to avoid exposing secrets in process args (visible via `ps`)
+        this.mcpConfigPath = join(tmpdir(), `mlb-mcp-${randomBytes(4).toString('hex')}.json`);
+        writeFileSync(this.mcpConfigPath, JSON.stringify({ mcpServers: this.opts.mcpServers }), { mode: 0o600 });
+        args.push('--mcp-config', this.mcpConfigPath);
       } catch (err) {
-        console.warn(`[claudecode] failed to serialize MCP config, skipping --mcp-config:`, (err as Error).message);
+        console.warn(`[claudecode] failed to write MCP config, skipping --mcp-config:`, (err as Error).message);
+        this.cleanupMcpConfig();
       }
     }
 
@@ -181,7 +186,9 @@ export class ClaudeSession {
     const type = data.type as string;
     const subtype = data.subtype as string | undefined;
 
-    console.log(`[claudecode:event] type=${type} subtype=${subtype || '-'} keys=${Object.keys(data).join(',')}`);
+    if (!(type === 'result' && subtype === 'success')) {
+      console.log(`[claudecode:event] type=${type} subtype=${subtype || '-'} keys=${Object.keys(data).join(',')}`);
+    }
 
     switch (type) {
       case 'system': {
@@ -228,11 +235,21 @@ export class ClaudeSession {
 
       case 'result': {
         const text = data.result || data.text || '';
+        // Extract token usage from result event
+        const rawUsage = data.usage as Record<string, number> | undefined;
+        const usage = rawUsage ? {
+          input: rawUsage.input_tokens || 0,
+          output: rawUsage.output_tokens || 0,
+          cacheRead: rawUsage.cache_read_input_tokens || 0,
+          cacheCreate: rawUsage.cache_creation_input_tokens || 0,
+        } : undefined;
         this.emitEvent({
           type: 'result',
           content: typeof text === 'string' ? text : JSON.stringify(text),
           sessionId: data.session_id || this.sessionId,
           isError: data.is_error === true || data.subtype === 'error_during_execution',
+          usage,
+          totalCostUsd: typeof data.total_cost_usd === 'number' ? data.total_cost_usd : undefined,
         });
         break;
       }
@@ -257,20 +274,23 @@ export class ClaudeSession {
       }
 
       case 'control_cancel_request': {
-        // Permission cancelled
-        console.log(`[claudecode] permission cancelled: ${data.request_id}`);
+        // Permission cancelled — emit event so gateway can resolve the pending promise
+        const cancelReqId = data.request_id;
+        console.log(`[claudecode] permission cancelled: ${cancelReqId}`);
+        this.emitEvent({
+          type: 'permission_cancel',
+          requestId: cancelReqId,
+          content: 'cancelled',
+        });
         break;
       }
 
       case 'user': {
-        // Log tool_use_result for debugging
+        // Tool results — brief summary under [claudecode:tool]
         if (data.tool_use_result) {
-          console.log(`[claudecode:tool_result] ${JSON.stringify(data.tool_use_result).substring(0, 1000)}`);
-        }
-        if (data.message?.content) {
-          const msg = data.message.content;
-          const preview = typeof msg === 'string' ? msg.substring(0, 500) : JSON.stringify(msg).substring(0, 500);
-          console.log(`[claudecode:user_content] ${preview}`);
+          const tr = data.tool_use_result;
+          const preview = (tr.stderr || tr.stdout || '').substring(0, 120).replace(/\n/g, ' ');
+          console.log(`[claudecode:tool] ${preview}`);
         }
         break;
       }
@@ -349,6 +369,13 @@ export class ClaudeSession {
     return this._alive;
   }
 
+  private cleanupMcpConfig(): void {
+    if (this.mcpConfigPath) {
+      try { unlinkSync(this.mcpConfigPath); } catch { /* ignore */ }
+      this.mcpConfigPath = null;
+    }
+  }
+
   async close(): Promise<void> {
     // Capture proc locally and nullify immediately to prevent concurrent close() races
     const proc = this.proc;
@@ -387,6 +414,7 @@ export class ClaudeSession {
       });
     });
 
+    this.cleanupMcpConfig();
     console.log(`[claudecode] session closed`);
   }
 }

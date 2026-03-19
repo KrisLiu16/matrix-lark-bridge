@@ -37,6 +37,9 @@ export class SessionStore {
       if (typeof data.stepCount === 'number') this.state.stepCount = data.stepCount;
       if (typeof data.startTime === 'number') this.state.startTime = data.startTime;
       if (Array.isArray(data.steps)) this.state.steps = data.steps;
+      if (Array.isArray(data.history)) this.state.history = data.history;
+      if (typeof data.noticeMode === 'boolean') this.state.noticeMode = data.noticeMode;
+      if (typeof data.contextLimit === 'number') this.state.contextLimit = data.contextLimit;
       console.log(`[session-store] loaded: agentSessionId=${this.state.agentSessionId || 'none'}`);
     } catch (err) {
       console.warn('[session-store] load error:', err);
@@ -90,6 +93,22 @@ export class SessionStore {
     if (this.state.steps.length > 200) {
       this.state.steps = this.state.steps.slice(-200);
     }
+  }
+
+  addHistory(role: 'user' | 'assistant', content: string): void {
+    if (!this.state.history) {
+      this.state.history = [];
+    }
+    this.state.history.push({
+      role,
+      content,
+      timestamp: new Date().toISOString(),
+    });
+    // Keep max 100 entries
+    if (this.state.history.length > 100) {
+      this.state.history = this.state.history.slice(-100);
+    }
+    this.save();
   }
 
   incrementStepCount(): number {

@@ -1,0 +1,20 @@
+appId: com.minimax.mlb-manager
+productName: MLB Manager
+directories:
+  buildResources: build
+  output: release
+files:
+  - dist/**/*
+  - "!node_modules/**/*"
+extraResources:
+  - from: "bridge-bundle/"
+    to: "bridge/"
+    filter:
+      - "**/*"
+mac:
+  category: public.app-category.developer-tools
+  icon: build/icon.icns
+  target:
+    - target: dmg
+      arch:
+        - arm64

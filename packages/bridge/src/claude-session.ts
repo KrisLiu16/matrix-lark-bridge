@@ -10,10 +10,17 @@ function findExecutable(name: string): string {
   // Check CLAUDE_PATH env first
   if (process.env.CLAUDE_PATH) return process.env.CLAUDE_PATH;
 
-  // Common locations
+  // Use login shell `which` first (gets full PATH including homebrew)
+  try {
+    const shell = process.env.SHELL || '/bin/zsh';
+    const p = execSync(`${shell} -l -c "which ${name}"`, { encoding: 'utf-8', timeout: 5000 }).trim();
+    if (p) return p;
+  } catch { /* not in PATH */ }
+
+  // Common locations fallback
   const candidates = [
     join(homedir(), '.local', 'bin', name),
-    join(homedir(), '.npm-global', 'bin', name),
+    `/opt/homebrew/bin/${name}`,
     `/usr/local/bin/${name}`,
     `/usr/bin/${name}`,
   ];
@@ -22,7 +29,7 @@ function findExecutable(name: string): string {
     if (existsSync(p)) return p;
   }
 
-  // Try `which` as fallback
+  // Bare `which` as last resort
   try {
     return execSync(`which ${name}`, { encoding: 'utf-8' }).trim();
   } catch {
@@ -205,6 +212,10 @@ export class ClaudeSession {
       }
 
       case 'assistant': {
+        if (data.error) {
+          console.error(`[claudecode:error] ${JSON.stringify(data.error)}`);
+          this.emitEvent({ type: 'error', content: typeof data.error === 'string' ? data.error : JSON.stringify(data.error) });
+        }
         const msg = data.message;
         if (!msg) break;
 

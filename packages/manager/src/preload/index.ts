@@ -35,6 +35,8 @@ const api = {
       ipcRenderer.invoke('claude:check'),
     install: (): Promise<{ installed: boolean; version?: string; path?: string }> =>
       ipcRenderer.invoke('claude:install'),
+    uninstall: (): Promise<{ success: boolean; removed: string[] }> =>
+      ipcRenderer.invoke('claude:uninstall'),
   },
   system: {
     getWorkspaceRoot: (): Promise<string> => ipcRenderer.invoke('app:get-workspace-root'),

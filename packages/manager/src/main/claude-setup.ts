@@ -1,5 +1,5 @@
 import { execSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { homedir, platform, arch } from 'node:os';
 import { join } from 'node:path';
 
@@ -7,6 +7,7 @@ export interface ClaudeSetupStatus {
   installed: boolean;
   version?: string;
   path?: string;
+  missing?: 'settings' | 'env_config' | 'settings_parse'; // what's missing if installed=false but binary exists
 }
 
 export interface InstallStepProgress {
@@ -42,19 +43,44 @@ const ENV_CONFIG = {
 export class ClaudeSetup {
   private _installing = false;
 
+  /**
+   * Comprehensive check: binary exists + settings configured + env vars set.
+   * Returns installed=false if any critical piece is missing — install flow will fix it.
+   */
   check(): ClaudeSetupStatus {
+    // 1. Find binary
+    let claudePath: string | undefined;
     try {
-      // Use login shell to get full PATH (GUI apps don't load shell profile)
       const shell = process.env.SHELL || '/bin/zsh';
       const p = execSync(`${shell} -l -c "which claude"`, { encoding: 'utf-8', timeout: 5000 }).trim();
-      if (p) return { installed: true, version: this.getVersion(p), path: p };
+      if (p) claudePath = p;
     } catch { /* not in PATH */ }
 
-    for (const p of CLAUDE_PATHS) {
-      if (existsSync(p)) return { installed: true, version: this.getVersion(p), path: p };
+    if (!claudePath) {
+      for (const p of CLAUDE_PATHS) {
+        if (existsSync(p)) { claudePath = p; break; }
+      }
     }
 
-    return { installed: false };
+    if (!claudePath) return { installed: false };
+
+    // 2. Check settings.json exists and has env config
+    const settingsPath = join(homedir(), '.claude', 'settings.json');
+    if (!existsSync(settingsPath)) {
+      return { installed: false, path: claudePath, missing: 'settings' };
+    }
+
+    try {
+      const settings = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+      const env = settings.env || {};
+      if (!env.ANTHROPIC_BASE_URL) {
+        return { installed: false, path: claudePath, missing: 'env_config' };
+      }
+    } catch {
+      return { installed: false, path: claudePath, missing: 'settings_parse' };
+    }
+
+    return { installed: true, version: this.getVersion(claudePath), path: claudePath };
   }
 
   async install(onProgress: (progress: InstallStepProgress) => void): Promise<ClaudeSetupStatus> {
@@ -72,6 +98,7 @@ export class ClaudeSetup {
       const cpu = arch();
       const shell = process.env.SHELL || '/bin/zsh';
       const shellName = shell.split('/').pop() || 'zsh';
+      await this.sleep(500);
       emit(1, 'env', 'done', {
         config: [
           { key: 'OS', value: `${os} ${cpu}` },
@@ -84,36 +111,49 @@ export class ClaudeSetup {
       emit(2, 'check', 'running');
       const existing = this.check();
       if (existing.installed) {
+        // Fully installed + configured — skip everything
         emit(2, 'check', 'done', {
-          detail: `v${existing.version}`,
+          detail: `v${existing.version} — fully configured`,
           config: [
             { key: 'Path', value: existing.path! },
             { key: 'Version', value: existing.version || 'unknown' },
           ],
         });
-        // Skip remaining steps
         for (let i = 3; i <= TOTAL_STEPS; i++) {
           const ids = ['download', 'install_path', 'config_dir', 'config_endpoint', 'config_env', 'verify'];
           emit(i, ids[i - 3] || `step${i}`, 'done', { detail: 'skipped' });
         }
         return existing;
-      }
-      emit(2, 'check', 'done', { detail: 'not found' });
+      } else if (existing.path) {
+        // Binary found but config missing
+        emit(2, 'check', 'done', {
+          detail: `found at ${existing.path} — config incomplete (${existing.missing})`,
+          config: [
+            { key: 'Path', value: existing.path },
+            { key: 'Missing', value: existing.missing || 'config' },
+          ],
+        });
+        emit(3, 'download', 'done', { detail: 'skipped — binary exists' });
+      } else {
+        emit(2, 'check', 'done', { detail: 'not found' });
 
-      // Step 3: Download & install (with streaming progress)
-      emit(3, 'download', 'running', { detail: 'downloading install script...' });
+        // Step 3: Download & install (real)
+        emit(3, 'download', 'running', { detail: 'downloading install script...' });
+        const localBinForDownload = join(homedir(), '.local/bin');
+        await this.runShellWithProgress(
+          'curl -fsSL https://claude.ai/install.sh | bash',
+          0, // no timeout — progress is streamed to UI
+          (line) => emit(3, 'download', 'running', { detail: line.slice(0, 80) }),
+        );
+        emit(3, 'download', 'done', {
+          config: [
+            { key: 'Source', value: 'https://claude.ai/install.sh' },
+            { key: 'Target', value: join(localBinForDownload, 'claude') },
+          ],
+        });
+      }
+
       const localBin = join(homedir(), '.local/bin');
-      await this.runShellWithProgress(
-        'curl -fsSL https://claude.ai/install.sh | bash',
-        120_000,
-        (line) => emit(3, 'download', 'running', { detail: line.slice(0, 80) }),
-      );
-      emit(3, 'download', 'done', {
-        config: [
-          { key: 'Source', value: 'https://claude.ai/install.sh' },
-          { key: 'Target', value: join(localBin, 'claude') },
-        ],
-      });
 
       // Step 4: Configure PATH
       emit(4, 'install_path', 'running');
@@ -140,7 +180,7 @@ export class ClaudeSetup {
 
       // Step 6: Configure API endpoint
       emit(6, 'config_endpoint', 'running');
-      await this.sleep(300); // brief pause for visual effect
+      await this.sleep(300);
       emit(6, 'config_endpoint', 'done', {
         config: [
           { key: 'ANTHROPIC_BASE_URL', value: ENV_CONFIG.ANTHROPIC_BASE_URL.value },
@@ -160,13 +200,28 @@ export class ClaudeSetup {
         ],
       });
 
-      // Step 8: Verify installation
-      emit(8, 'verify', 'running');
+      // Step 8: Verify installation + first-run initialization
+      emit(8, 'verify', 'running', { detail: 'verifying...' });
       if (!process.env.PATH?.includes(localBin)) {
         process.env.PATH = `${localBin}:${process.env.PATH}`;
       }
       const result = this.check();
       if (!result.installed) throw new Error('claude not found after installation');
+
+      // Run `claude -p "hello"` to complete first-run setup (accept ToS, etc.)
+      // -p mode skips workspace trust dialog and handles first-run non-interactively
+      emit(8, 'verify', 'running', { detail: 'completing first-run setup...' });
+      try {
+        await this.runShellWithProgress(
+          `"${result.path}" -p "hello" 2>&1 || true`,
+          0, // no timeout
+          (line) => emit(8, 'verify', 'running', { detail: line.slice(0, 80) }),
+        );
+      } catch {
+        // First-run may fail if API is unreachable — that's OK, binary is still installed
+        console.warn('[claude-setup] first-run test failed, continuing anyway');
+      }
+
       emit(8, 'verify', 'done', {
         detail: `v${result.version}`,
         config: [
@@ -185,6 +240,46 @@ export class ClaudeSetup {
     } finally {
       this._installing = false;
     }
+  }
+
+  /**
+   * Uninstall Claude Code: remove binary + config directory.
+   */
+  async uninstall(): Promise<{ success: boolean; removed: string[] }> {
+    const removed: string[] = [];
+    const shell = process.env.SHELL || '/bin/zsh';
+
+    // 1. Find actual binary location via `which claude`
+    let claudePath: string | undefined;
+    try {
+      claudePath = execSync(`${shell} -l -c "which claude"`, { encoding: 'utf-8', timeout: 5000 }).trim();
+    } catch {}
+
+    // 2. Determine install method and uninstall accordingly
+    if (claudePath?.includes('homebrew') || claudePath?.includes('Caskroom')) {
+      try {
+        execSync(`${shell} -l -c "brew uninstall claude-code"`, { timeout: 30000 });
+        removed.push(`brew uninstall claude-code (${claudePath})`);
+      } catch {}
+    } else if (claudePath) {
+      try { rmSync(claudePath, { force: true }); removed.push(claudePath); } catch {}
+    }
+
+    // 3. Also check known paths in case `which` missed something
+    for (const p of CLAUDE_PATHS) {
+      if (existsSync(p)) {
+        try { rmSync(p, { force: true }); removed.push(p); } catch {}
+      }
+    }
+
+    // 4. Remove ~/.claude config directory
+    const claudeDir = join(homedir(), '.claude');
+    if (existsSync(claudeDir)) {
+      try { rmSync(claudeDir, { recursive: true, force: true }); removed.push(claudeDir); } catch {}
+    }
+
+    console.log(`[claude-setup] uninstalled, removed: ${removed.join(', ')}`);
+    return { success: true, removed };
   }
 
   private getVersion(claudePath: string): string | undefined {
@@ -209,7 +304,9 @@ export class ClaudeSetup {
 
       let stdout = '';
       let stderr = '';
-      const timer = setTimeout(() => { child.kill(); reject(new Error(`timeout after ${timeout}ms`)); }, timeout);
+      const timer = timeout > 0
+        ? setTimeout(() => { child.kill(); reject(new Error(`timeout after ${timeout}ms`)); }, timeout)
+        : null;
 
       const processLine = (data: Buffer) => {
         const text = data.toString();
@@ -236,7 +333,7 @@ export class ClaudeSetup {
       });
 
       child.on('close', (code) => {
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
         if (code !== 0) reject(new Error(`exit code ${code}: ${stderr.slice(-200)}`));
         else resolve(stdout);
       });

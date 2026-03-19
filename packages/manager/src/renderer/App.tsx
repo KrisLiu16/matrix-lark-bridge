@@ -106,7 +106,23 @@ export default function App() {
             {runningCount > 0 && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse-dot" />}
             {t('statusbar.running', { count: runningCount })}
           </span>
-          <span className="ml-auto">MLB Manager v0.1</span>
+          <span className="ml-auto flex items-center gap-3">
+            <button
+              onClick={async () => {
+                if (!confirm('卸载 Claude Code 并删除所有配置？\n\n将删除:\n• ~/.local/bin/claude\n• ~/.claude/ 配置目录\n• homebrew claude-code')) return;
+                try {
+                  const res = await window.mlb.claude.uninstall();
+                  alert(`已卸载。删除了: ${res.removed.join(', ')}`);
+                  checkClaude(); // re-check → will show setup page
+                } catch (e) { alert(`卸载失败: ${e}`); }
+              }}
+              className="text-red-400 hover:text-red-600 dark:hover:text-red-300 transition-colors"
+              title="卸载 Claude Code（测试用）"
+            >
+              卸载CC
+            </button>
+            <span>MLB Manager v0.1</span>
+          </span>
         </div>
       </main>
 

@@ -170,4 +170,8 @@ export function registerIPCHandlers(
     });
     return result;
   });
+
+  ipcMain.handle('claude:uninstall', async () => {
+    return claudeSetup.uninstall();
+  });
 }

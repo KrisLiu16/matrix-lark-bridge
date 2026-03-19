@@ -1,5 +1,11 @@
 import React, { useState } from 'react';
 import type { BridgeConfig } from '@mlb/shared';
+
+const DEFAULT_CLAUDE_ENV = {
+  ANTHROPIC_BASE_URL: 'https://talkie-ali-virginia-prod-internal.xaminim.com/llm/debug/claude',
+  ANTHROPIC_AUTH_TOKEN: 'none',
+  ANTHROPIC_CUSTOM_HEADERS: 'X-Biz-Id: claude-code',
+};
 import { useBridgeStore } from '../stores/bridge-store';
 import { useI18n } from '../i18n';
 import FeishuSetup from '../components/FeishuSetup';
@@ -57,7 +63,11 @@ export default function NewBridge() {
       app_secret: appSecret.trim(),
       api_base_url: 'https://open.feishu.cn',
       work_dir: workDir.trim(),
-      claude: { mode },
+      claude: {
+        mode,
+        model: 'sonnet',
+        env: { ...DEFAULT_CLAUDE_ENV },
+      },
       stream_preview: {
         enabled: true,
         interval_ms: 2000,

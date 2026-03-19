@@ -1,5 +1,5 @@
 import { execSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, copyFileSync, chmodSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { homedir, platform, arch } from 'node:os';
 import { join } from 'node:path';
 
@@ -25,7 +25,7 @@ export interface InstallStepProgress {
   error?: string;
 }
 
-const TOTAL_STEPS = 5;
+const TOTAL_STEPS = 4;
 
 /** MLB-dedicated install path — isolated from user's global CC */
 const MLB_BIN_DIR = join(homedir(), '.mlb', 'bin');
@@ -82,58 +82,53 @@ export class ClaudeSetup {
           ],
         });
         for (let i = 3; i <= TOTAL_STEPS; i++) {
-          const ids = ['download', 'install_path', 'verify'];
+          const ids = ['download', 'verify'];
           emit(i, ids[i - 3] || `step${i}`, 'done', { detail: 'skipped' });
         }
         return existing;
       } else {
         emit(2, 'check', 'done', { detail: 'not found' });
 
-        // Step 3: Download via official install script → ~/.local/bin/claude
-        emit(3, 'download', 'running', { detail: 'downloading install script...' });
+        // Step 3: Download CC binary directly to ~/.mlb/bin/claude
+        // Uses the same GCS source as the official install script, but installs to our own path
+        emit(3, 'download', 'running', { detail: 'fetching latest version...' });
+        if (!existsSync(MLB_BIN_DIR)) mkdirSync(MLB_BIN_DIR, { recursive: true });
+
+        const dlOs = platform() === 'darwin' ? 'darwin' : 'linux';
+        const dlCpu = arch() === 'arm64' ? 'arm64' : 'x64';
+        const plat = `${dlOs}-${dlCpu}`;
+        const downloadScript = [
+          'set -e',
+          'GCS="https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases"',
+          'VERSION=$(curl -fsSL "$GCS/latest")',
+          'echo "latest version: $VERSION"',
+          `echo "downloading claude $VERSION for ${plat}..."`,
+          `curl -fSL "$GCS/$VERSION/${plat}/claude" -o "${MLB_CLAUDE_PATH}"`,
+          `chmod +x "${MLB_CLAUDE_PATH}"`,
+          `echo "installed to ${MLB_CLAUDE_PATH}"`,
+        ].join('\n');
+
         await this.runShellWithProgress(
-          'curl -fsSL https://claude.ai/install.sh | bash',
+          downloadScript,
           0,
           (line) => emit(3, 'download', 'running', { detail: line.slice(0, 80) }),
         );
         emit(3, 'download', 'done', {
-          config: [{ key: 'Source', value: 'https://claude.ai/install.sh' }],
-        });
-
-        // Step 4: Copy to MLB-dedicated path ~/.mlb/bin/claude
-        emit(4, 'install_path', 'running');
-        if (!existsSync(MLB_BIN_DIR)) mkdirSync(MLB_BIN_DIR, { recursive: true });
-        // Find the downloaded binary (install.sh puts it in ~/.local/bin/)
-        const downloadedPath = join(homedir(), '.local/bin/claude');
-        if (existsSync(downloadedPath)) {
-          copyFileSync(downloadedPath, MLB_CLAUDE_PATH);
-          chmodSync(MLB_CLAUDE_PATH, 0o755);
-        } else {
-          // Fallback: try which claude via login shell
-          try {
-            const shell = process.env.SHELL || '/bin/zsh';
-            const found = execSync(`${shell} -l -c "which claude"`, { encoding: 'utf-8', timeout: 5000 }).trim();
-            if (found) { copyFileSync(found, MLB_CLAUDE_PATH); chmodSync(MLB_CLAUDE_PATH, 0o755); }
-          } catch {
-            throw new Error('Could not find claude binary after install');
-          }
-        }
-        emit(4, 'install_path', 'done', {
           config: [
-            { key: 'From', value: downloadedPath },
-            { key: 'To', value: MLB_CLAUDE_PATH },
+            { key: 'Source', value: 'Google Cloud Storage (official)' },
+            { key: 'Target', value: MLB_CLAUDE_PATH },
           ],
         });
       }
 
-      // Step 5: Verify installation + first-run initialization
-      emit(5, 'verify', 'running', { detail: 'verifying...' });
+      // Step 4: Verify installation + first-run initialization
+      emit(4, 'verify', 'running', { detail: 'verifying...' });
       const result = this.check();
       if (!result.installed) throw new Error('claude not found after installation');
 
       // Run `claude -p "hello"` to complete first-run setup (accept ToS, etc.)
       // -p mode skips workspace trust dialog and handles first-run non-interactively
-      emit(5, 'verify', 'running', { detail: 'completing first-run setup...' });
+      emit(4, 'verify', 'running', { detail: 'completing first-run setup...' });
       try {
         await this.runShellWithProgress(
           `"${result.path}" -p "hello" 2>&1 || true`,
@@ -145,7 +140,7 @@ export class ClaudeSetup {
         console.warn('[claude-setup] first-run test failed, continuing anyway');
       }
 
-      emit(5, 'verify', 'done', {
+      emit(4, 'verify', 'done', {
         detail: `v${result.version}`,
         config: [
           { key: 'Binary', value: result.path! },

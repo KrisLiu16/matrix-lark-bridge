@@ -120,7 +120,7 @@ export default function App() {
             >
               Session failed? 点此修复
             </button>
-            <span>MLB Manager v0.1</span>
+            <span>MLB Manager v{__MLB_VERSION__}</span>
           </span>
         </div>
       </main>

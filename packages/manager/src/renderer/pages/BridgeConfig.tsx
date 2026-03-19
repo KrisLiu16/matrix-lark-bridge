@@ -1,5 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import type { BridgeConfig as BridgeConfigType } from '@mlb/shared';
+
+const DEFAULT_CLAUDE_ENV = {
+  ANTHROPIC_BASE_URL: 'https://talkie-ali-virginia-prod-internal.xaminim.com/llm/debug/claude',
+  ANTHROPIC_AUTH_TOKEN: 'none',
+  ANTHROPIC_CUSTOM_HEADERS: 'X-Biz-Id: claude-code',
+};
 import { useBridgeStore } from '../stores/bridge-store';
 import { useI18n } from '../i18n';
 import { toast } from '../stores/toast-store';
@@ -168,10 +174,7 @@ export default function BridgeConfig({ name }: BridgeConfigProps) {
               <div className="flex items-center justify-between mb-2">
                 <label className="text-xs font-medium text-slate-600 dark:text-slate-400">{t('config.claude.env')}</label>
                 <button
-                  onClick={() => {
-                    const { DEFAULT_CLAUDE_ENV } = require('@mlb/shared');
-                    updateField('claude', { ...config.claude, env: { ...DEFAULT_CLAUDE_ENV } });
-                  }}
+                  onClick={() => updateField('claude', { ...config.claude, env: { ...DEFAULT_CLAUDE_ENV } })}
                   className="text-xs text-indigo-500 hover:text-indigo-600 transition-colors"
                 >{t('config.claude.env.reset')}</button>
               </div>

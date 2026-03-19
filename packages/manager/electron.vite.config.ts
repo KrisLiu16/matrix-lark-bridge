@@ -1,12 +1,14 @@
 import { defineConfig } from 'electron-vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import { readFileSync } from 'fs';
+
+const pkg = JSON.parse(readFileSync('./package.json', 'utf-8'));
 
 export default defineConfig({
   main: {
     build: {
       outDir: 'dist/main',
-      // Bundle ALL deps into output (pnpm symlinks break in asar)
       externalizeDeps: false,
       rollupOptions: {
         external: ['electron'],
@@ -21,6 +23,9 @@ export default defineConfig({
   },
   renderer: {
     plugins: [react(), tailwindcss()],
+    define: {
+      __MLB_VERSION__: JSON.stringify(pkg.version),
+    },
     build: {
       outDir: 'dist/renderer',
     },

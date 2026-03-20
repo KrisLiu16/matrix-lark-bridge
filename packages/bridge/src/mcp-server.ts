@@ -4,6 +4,7 @@ import { ALL_TOOLS, OAPI_TOOL_NAMES, MCP_DOC_TOOL_NAMES, resolveTokenMode, type 
 import { executeOapiTool } from './mcp-tool-handlers.js';
 import { MlbMcpError, UserAuthRequiredError, UserScopeInsufficientError, AppScopeMissingError } from './mcp-errors.js';
 import { getRequiredScopes } from './mcp-tool-scopes.js';
+import { findApiAuthPolicy } from './api-auth-policies.js';
 
 interface McpRequest {
   jsonrpc: '2.0';
@@ -173,26 +174,38 @@ export class LarkMcpServer {
       return { result: { content: [{ type: 'text', text: 'Error: path is required' }], isError: true } };
     }
 
-    // Path-based token mode detection for lark_api
-    let tokenMode: TokenMode = 'auto'; // default
-    if (path) {
-      // IM message send/reply/update — always TAT (bot identity)
-      if (/\/im\/v1\/messages/.test(path) && (method === 'POST' || method === 'PUT' || method === 'PATCH')) {
-        tokenMode = 'tenant';
-      }
-      // Bot info — always TAT
-      if (/\/bot\/v3\/info/.test(path)) {
-        tokenMode = 'tenant';
-      }
-      // Message recall — always TAT (can only recall bot's own messages)
-      if (/\/im\/v1\/messages\/.*\/delete/.test(path) && method === 'DELETE') {
-        tokenMode = 'tenant';
+    // Policy-based token mode detection for lark_api
+    const policy = findApiAuthPolicy(path, method);
+    let tokenMode: TokenMode = 'auto'; // default when no policy matches
+    if (policy) {
+      if (policy.preferred === 'tenant') {
+        tokenMode = policy.fallback ? 'auto' : 'tenant';
+      } else {
+        // preferred === 'user'
+        tokenMode = policy.fallback ? 'auto' : 'user';
       }
     }
 
-    console.error(`[lark-mcp] API call: ${method} ${path} tokenMode=${tokenMode}${body ? ' (with body)' : ''}`);
+    console.error(`[lark-mcp] API call: ${method} ${path} tokenMode=${tokenMode} policy=${policy?.description ?? 'none'}${body ? ' (with body)' : ''}`);
 
     try {
+      // Scope pre-check for user-mode lark_api calls
+      if (policy && policy.scopes.length > 0 && (tokenMode === 'user' || tokenMode === 'auto')) {
+        const userScopes = await this.getUserGrantedScopes();
+        if (userScopes !== null) {
+          const missing = policy.scopes.filter(s => !userScopes.has(s));
+          if (missing.length > 0 && tokenMode === 'user') {
+            // Strict user mode: no scope = error
+            throw new UserScopeInsufficientError(`lark_api:${path}`, missing);
+          }
+          // In auto mode: if scopes missing, prefer tenant fallback (skip UAT)
+          if (missing.length > 0 && tokenMode === 'auto') {
+            tokenMode = 'tenant';
+            console.error(`[lark-mcp] lark_api scope insufficient for UAT, falling back to TAT: missing=${missing.join(',')}`);
+          }
+        }
+      }
+
       const opts = await this.resolveRequestOptionsForMode(tokenMode);
       const result = await this.sdkClient.request({
         method: method as any,
@@ -206,6 +219,11 @@ export class LarkMcpServer {
         return { result: { content: [{ type: 'text', text: JSON.stringify(err.toToolResult(), null, 2) }], isError: true } };
       }
       const structured = this.detectAuthError(err, 'lark_api');
+      if (structured && policy?.scopes?.length) {
+        // Enrich structured error with policy scope info
+        (structured as any).suggested_scopes = policy.scopes;
+        (structured as any).api_path = path;
+      }
       if (structured) {
         return { result: { content: [{ type: 'text', text: JSON.stringify(structured, null, 2) }], isError: true } };
       }

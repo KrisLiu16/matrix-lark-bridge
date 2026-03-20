@@ -1,4 +1,7 @@
-import { app, ipcMain, type BrowserWindow } from 'electron';
+import { app, ipcMain, shell, type BrowserWindow } from 'electron';
+import { readdirSync, statSync, readFileSync, existsSync, openSync, readSync, closeSync, realpathSync } from 'node:fs';
+import { join, resolve, relative } from 'node:path';
+import { homedir } from 'node:os';
 import type { BridgeConfig } from '@mlb/shared';
 import { WORKSPACE_ROOT } from '@mlb/shared';
 import type { BridgeProcessManager } from './bridge-process-manager.js';
@@ -145,6 +148,101 @@ export function registerIPCHandlers(
 
   ipcMain.handle('autostart:status', async (_event, name: string) => {
     return autoStart.isEnabled(validateBridgeName(name));
+  });
+
+  // --- Files ---
+
+  function resolveWorkDir(name: string): string {
+    const config = configStore.readConfig(name);
+    const workDir = (config.work_dir || '').replace(/^~/, homedir());
+    if (!workDir) throw new Error(`No work_dir configured for bridge "${name}"`);
+    return resolve(workDir);
+  }
+
+  function assertInsideWorkDir(workDir: string, target: string): string {
+    const resolved = resolve(workDir, target);
+    // Resolve symlinks to prevent escape via symlink chains
+    let realTarget: string;
+    let realWorkDir: string;
+    try { realTarget = realpathSync(resolved); } catch { realTarget = resolved; }
+    try { realWorkDir = realpathSync(workDir); } catch { realWorkDir = workDir; }
+    if (!realTarget.startsWith(realWorkDir + '/') && realTarget !== realWorkDir) {
+      throw new Error('Path traversal not allowed');
+    }
+    return resolved;
+  }
+
+  ipcMain.handle('bridge:files', async (_event, name: string, subpath?: string) => {
+    const validName = validateBridgeName(name);
+    const workDir = resolveWorkDir(validName);
+    const targetDir = subpath ? assertInsideWorkDir(workDir, subpath) : workDir;
+
+    if (!existsSync(targetDir)) {
+      throw new Error(`Directory not found: ${targetDir}`);
+    }
+
+    const entries = readdirSync(targetDir);
+    const result: { name: string; path: string; isDirectory: boolean; size: number; modifiedTime: string }[] = [];
+
+    for (const entry of entries) {
+      if (entry.startsWith('.')) continue; // skip hidden files
+      try {
+        const fullPath = join(targetDir, entry);
+        const stat = statSync(fullPath);
+        result.push({
+          name: entry,
+          path: relative(workDir, fullPath),
+          isDirectory: stat.isDirectory(),
+          size: stat.isDirectory() ? 0 : stat.size,
+          modifiedTime: stat.mtime.toISOString(),
+        });
+      } catch { /* skip inaccessible entries */ }
+    }
+
+    // Sort: directories first, then files, alphabetical within each group
+    result.sort((a, b) => {
+      if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    return { entries: result, workDir, currentPath: relative(workDir, targetDir) || '.' };
+  });
+
+  ipcMain.handle('bridge:file-content', async (_event, name: string, filePath: string, maxBytes?: number) => {
+    const validName = validateBridgeName(name);
+    const workDir = resolveWorkDir(validName);
+    const fullPath = assertInsideWorkDir(workDir, filePath);
+
+    if (!existsSync(fullPath)) throw new Error(`File not found: ${filePath}`);
+    const stat = statSync(fullPath);
+    if (stat.isDirectory()) throw new Error('Cannot read directory as file');
+
+    const MAX_FILE_READ = 10 * 1024 * 1024; // 10MB hard cap
+    const limit = Math.min(maxBytes ?? 512 * 1024, MAX_FILE_READ);
+    const buf = Buffer.alloc(Math.min(stat.size, limit));
+    const fd = openSync(fullPath, 'r');
+    try {
+      const bytesRead = readSync(fd, buf, 0, buf.length, 0);
+      return {
+        content: buf.toString('utf-8', 0, bytesRead),
+        truncated: stat.size > limit,
+        size: stat.size,
+      };
+    } finally {
+      closeSync(fd);
+    }
+  });
+
+  ipcMain.handle('bridge:reveal-file', async (_event, name: string, filePath?: string) => {
+    const validName = validateBridgeName(name);
+    const workDir = resolveWorkDir(validName);
+    const fullPath = filePath ? assertInsideWorkDir(workDir, filePath) : workDir;
+
+    if (existsSync(fullPath)) {
+      shell.showItemInFolder(fullPath);
+    } else {
+      shell.openPath(workDir);
+    }
   });
 
   // --- System ---

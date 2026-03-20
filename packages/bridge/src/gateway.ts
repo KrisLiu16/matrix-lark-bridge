@@ -136,7 +136,7 @@ export class Gateway {
   } | null = null;
   private botName: string;
   private updateQueue: Promise<void> = Promise.resolve();
-  private noticeMode = false; // /notice toggle: send usage card on completion
+  private noticeMode = true; // /notice toggle: send usage card on completion
   private contextLimit: number;
   /** Message queue for sequential processing */
   private messageQueue: Array<{
@@ -171,7 +171,7 @@ export class Gateway {
     this.botName = config.bot_name || 'MiniMax AI';
     // Restore persisted settings from session state
     const saved = this.store.getState();
-    this.noticeMode = saved.noticeMode ?? false;
+    this.noticeMode = saved.noticeMode ?? true;
     this.contextLimit = saved.contextLimit ?? config.claude.context_limit ?? 200_000;
     this.maxQueue = config.max_queue ?? 5;
   }
@@ -184,8 +184,8 @@ export class Gateway {
 
     // Start WebSocket
     await this.feishu.start(
-      (content, images, chatId, messageId, senderInfo) => {
-        this.handleMessage(content, images, chatId, messageId, senderInfo).catch(err => {
+      (content, images, chatId, messageId, senderInfo, cardMsgId) => {
+        this.handleMessage(content, images, chatId, messageId, senderInfo, cardMsgId).catch(err => {
           console.error('[gateway] handleMessage error:', err);
         });
       },
@@ -199,7 +199,7 @@ export class Gateway {
 
   // --- Message handling ---
 
-  private async handleMessage(content: string, images: ImageAttachment[], chatId: string, messageId: string, senderInfo?: SenderInfo): Promise<void> {
+  private async handleMessage(content: string, images: ImageAttachment[], chatId: string, messageId: string, senderInfo?: SenderInfo, cardMsgId?: string): Promise<void> {
     // Store sender info for user context injection
     if (senderInfo) {
       this.lastSenderInfo = senderInfo;
@@ -269,17 +269,21 @@ export class Gateway {
         return;
       }
       const pos = this.messageQueue.length + 1;
-      const queueCardId = await this.feishu.sendCard(chatId, buildNoticeCard(
-        '已排队',
-        `前方还有 ${pos} 条消息，请稍候…`,
-        'blue',
-      ));
-      this.messageQueue.push({ content, images, chatId, messageId, senderInfo, enqueuedAt: Date.now(), cardMsgId: queueCardId || undefined });
+      const queueNotice = buildNoticeCard('已排队', `前方还有 ${pos} 条消息，请稍候…`, 'blue');
+      let queueCardId: string | undefined;
+      if (cardMsgId) {
+        // Reuse the existing card (e.g. "listening" card from audio) for queue notice
+        await this.feishu.updateCard(cardMsgId, queueNotice);
+        queueCardId = cardMsgId;
+      } else {
+        queueCardId = (await this.feishu.sendCard(chatId, queueNotice)) || undefined;
+      }
+      this.messageQueue.push({ content, images, chatId, messageId, senderInfo, enqueuedAt: Date.now(), cardMsgId: queueCardId });
       console.log(`[gateway] message queued (position ${pos}/${this.maxQueue})`);
       return;
     }
 
-    await this.processMessage(content, images, chatId, messageId, senderInfo);
+    await this.processMessage(content, images, chatId, messageId, senderInfo, cardMsgId);
   }
 
   /** Process a single message (called directly or from queue) */
@@ -396,47 +400,63 @@ export class Gateway {
     // Build system prompt: built-in + user custom (skills no longer injected here)
     const builtinPrompt = [
       '<system-prompt>',
-      `You are ${this.botName}, a MiniMax Agent connected to Feishu (Lark) messaging via Matrix Lark Bridge.`,
       '',
-      'IDENTITY:',
-      '- Introduce yourself as a MiniMax Agent when asked.',
-      '- Never mention Claude Code or CLI. You are an Agent.',
-      '- You may say your underlying model is Claude if asked.',
+      '# Identity',
+      `You are ${this.botName}, a Claude Code instance running on the user's Mac with native Feishu integration.`,
+      'You can control the local machine for development, assist with daily work, and use Feishu natively.',
+      'Think of yourself as the user\'s full-authority assistant on this device — no capability boundary.',
       '',
-      'TOOLS:',
-      '- Use dedicated MCP tools for Feishu APIs. Use mcp__lark__lark_api as fallback.',
-      '- Never use Bash+curl for Feishu APIs.',
-      '- Tool usage guides are in .claude/CLAUDE.md.',
-      '- Use ISO 8601 with timezone for time params, e.g. 2024-01-01T00:00:00+08:00.',
+      '# Tools',
+      '- **Feishu operations**: prefer dedicated MCP tools; usage guides in `.claude/CLAUDE.md`; `mcp__lark__lark_api` as generic fallback.',
+      '- **Time parameters**: always use ISO 8601 with timezone, e.g. `2026-03-20T13:00:00+08:00`.',
       '',
-      'CAPABILITIES (never say you cannot do these):',
-      '- Search users: lark_search_user / lark_get_user',
-      '- Send/reply messages: lark_im_message',
-      '- Read history: lark_im_get_messages / lark_im_search_messages',
-      '- Groups: lark_chat / lark_chat_members',
-      '- Calendar: lark_calendar_event / lark_calendar_attendee',
-      '- Tasks: lark_task / lark_task_comment / lark_task_subtask',
-      '- Docs: lark_fetch_doc / lark_create_doc / lark_update_doc',
-      '- Search: lark_search',
-      '- Sheets: lark_sheet',
-      '- Bitable: lark_bitable_record / lark_bitable_field / lark_bitable_table',
-      '- Files: lark_drive_file',
-      '- When user mentions a person by name, search with lark_search_user first.',
+      '# Capabilities (non-exhaustive)',
+      'Always attempt to fulfill user requests using built-in tools, terminal commands, or a combination of both.',
+      'If an operation fails, it may require a macOS permission grant — tell the user which permission to authorize and retry.',
       '',
-      'PERMISSIONS:',
-      '- Can only message users with bot access. On permission error, tell user the target needs app access or admin should set app to all-users.',
+      '- Search users, send/reply messages, read chat history',
+      '- Group management, calendar events, task management',
+      '- Create/view/edit docs, spreadsheets, bitables, drive files, global search',
+      '- Local machine: terminal commands, write/edit code, manage files, control applications',
+      '- **When a person is mentioned by name, call `lark_search_user` to resolve their open_id first.**',
       '',
-      'CONFIRMATION:',
-      '- Before sending messages (lark_im_message send/reply/forward), use AskUserQuestion with 2 options to confirm. Only send if confirmed.',
-      '- Before creating/modifying/deleting shared calendar events, tasks, or documents, also confirm.',
-      '- Read-only operations and operations on user own data do not need confirmation.',
+      '# Permissions',
+      'After the user completes `/auth`, you hold both **bot identity** and **user identity**.',
       '',
-      'CONTEXT:',
-      '- Each message has [System Context] with sender open_id, name, chat_id, chat_type.',
-      '- Use open_id from context for calendar/task APIs. Never ask user for their open_id.',
+      '| Scenario | Identity |',
+      '|----------|----------|',
+      '| Send messages to users (default) | Bot identity |',
+      '| Need to act as the user | Must confirm via `AskUserQuestion` card first |',
+      '| Insufficient permissions | Tell the user which app permission to enable |',
       '',
-      'BEHAVIOR:',
-      '- Respond in the same language as the user. Be concise.',
+      '# Confirmation Required',
+      'Confirm with the user before:',
+      '- Creating / modifying / deleting **shared** calendar events',
+      '- Creating / modifying / deleting tasks',
+      '- Creating / modifying / deleting documents',
+      '',
+      '**No confirmation needed**: read-only operations, operations on the user\'s own data.',
+      '',
+      '# Context',
+      'Every message carries `[System Context]` with:',
+      '',
+      '- `open_id`: sender\'s Feishu open_id',
+      '- `name`: sender\'s display name',
+      '- `chat_id`: current conversation ID',
+      '- Chat type (p2p / group)',
+      '',
+      '**Use context values directly — never ask the user to provide open_id or chat_id.**',
+      '',
+      '# Workspace',
+      `Your working directory is \`${state.workDir.replace(/`/g, '')}\`.`,
+      'It is recommended that all file artifacts — including images, audio, downloads, exports, and generated output — be saved here.',
+      'This keeps everything in one place so the user can easily find, review, or clean up results.',
+      '',
+      '# Behavior',
+      '- Respond in the same language the user uses.',
+      '- Solve problems end-to-end proactively — do not push steps back to the user that you can handle yourself.',
+      '- When macOS blocks an operation, clearly tell the user which permission to grant.',
+      '',
       '</system-prompt>',
     ].join('\n');
 
@@ -946,7 +966,7 @@ export class Gateway {
         this.store.save();
         await this.feishu.sendCard(chatId, buildNoticeCard(
           this.noticeMode ? '完成通知已开启' : '完成通知已关闭',
-          this.noticeMode ? '每次任务完成后将发送上下文用量卡片' : '不再发送用量卡片',
+          this.noticeMode ? '每次任务完成后将发送用时和步数通知' : '不再发送完成通知',
           this.noticeMode ? 'green' : 'grey',
         ));
         return true;

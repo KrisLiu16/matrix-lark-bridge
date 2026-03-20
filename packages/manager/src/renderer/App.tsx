@@ -9,6 +9,7 @@ import BridgeConfig from './pages/BridgeConfig';
 import NewBridge from './pages/NewBridge';
 import LogViewer from './pages/LogViewer';
 import SessionViewer from './pages/SessionViewer';
+import FileManager from './pages/FileManager';
 
 export default function App() {
   const { currentPage, selectedBridge, fetchBridges, navigate, bridges } = useBridgeStore();
@@ -57,6 +58,8 @@ export default function App() {
         return selectedBridge ? <LogViewer name={selectedBridge} /> : <EmptyState t={t} />;
       case 'session':
         return selectedBridge ? <SessionViewer name={selectedBridge} /> : <EmptyState t={t} />;
+      case 'files':
+        return selectedBridge ? <FileManager name={selectedBridge} /> : <EmptyState t={t} />;
       default:
         return selectedBridge ? <BridgeDetail name={selectedBridge} /> : <EmptyState t={t} />;
     }
@@ -183,6 +186,7 @@ function BridgeDetail({ name }: { name: string }) {
         )}
         <ActionBtn label={t('bridge.action.logs')} onClick={() => navigate('logs', bridge.name)} />
         <ActionBtn label={t('bridge.action.session')} onClick={() => navigate('session', bridge.name)} />
+        <ActionBtn label={t('files.action.files')} onClick={() => navigate('files', bridge.name)} />
         <ActionBtn label={t('bridge.action.config')} onClick={() => navigate('config', bridge.name)} />
       </div>
     </div>

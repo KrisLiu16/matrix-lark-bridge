@@ -17,6 +17,16 @@ const api = {
     logsStop: (name: string): Promise<void> => ipcRenderer.invoke('bridge:logs-stop', name),
     session: (name: string): Promise<SessionState | null> => ipcRenderer.invoke('bridge:session', name),
     readConfig: (name: string): Promise<BridgeConfig> => ipcRenderer.invoke('bridge:read-config', name),
+    files: (name: string, subpath?: string): Promise<{
+      entries: { name: string; path: string; isDirectory: boolean; size: number; modifiedTime: string }[];
+      workDir: string;
+      currentPath: string;
+    }> => ipcRenderer.invoke('bridge:files', name, subpath),
+    fileContent: (name: string, filePath: string, maxBytes?: number): Promise<{
+      content: string; truncated: boolean; size: number;
+    }> => ipcRenderer.invoke('bridge:file-content', name, filePath, maxBytes),
+    revealFile: (name: string, filePath?: string): Promise<void> =>
+      ipcRenderer.invoke('bridge:reveal-file', name, filePath),
   },
   feishu: {
     initQR: (): Promise<FeishuQRInit & { qrDataUrl: string }> => ipcRenderer.invoke('feishu:init-qr'),

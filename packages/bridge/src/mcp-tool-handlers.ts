@@ -9,8 +9,12 @@
 import * as lark from '@larksuiteoapi/node-sdk';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { writeFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
-import { join, basename, dirname, extname } from 'node:path';
+import { writeFileSync, mkdirSync, readFileSync, statSync, unlinkSync, realpathSync } from 'node:fs';
+import { join, basename, dirname, extname, resolve } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 type RequestOptions = ReturnType<typeof lark.withUserAccessToken> | undefined;
 
@@ -19,6 +23,37 @@ type RequestOptions = ReturnType<typeof lark.withUserAccessToken> | undefined;
 /** UTC+8 (Asia/Shanghai); extract to config if needed for other regions */
 const TZ_OFFSET_HOURS = 8;
 const TZ_OFFSET_STRING = '+08:00';
+
+/** Image file extensions allowed for upload */
+const ALLOWED_IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp']);
+
+/** Max audio file size for ASR processing (20MB) */
+const MAX_AUDIO_SIZE = 20 * 1024 * 1024;
+
+/**
+ * Validate that a file path is within allowed directories (workDir or tmpdir).
+ * Resolves symlinks to prevent escape. Blocks access to sensitive directories.
+ */
+function assertAllowedFilePath(filePath: string): string {
+  const resolved = resolve(filePath);
+  let realPath: string;
+  try {
+    realPath = realpathSync(resolved);
+  } catch {
+    // File may not exist yet — use the resolved path
+    realPath = resolved;
+  }
+  const workDir = process.env.MLB_WORKSPACE;
+  const tmp = tmpdir();
+  const allowedDirs = [tmp];
+  if (workDir) allowedDirs.push(resolve(workDir));
+  if (!allowedDirs.some(d => realPath === d || realPath.startsWith(d + '/'))) {
+    throw new Error(
+      `Access denied: file_path must be within the work directory or temp directory. Got: ${filePath}`,
+    );
+  }
+  return realPath;
+}
 
 // ─── Time helpers (ported from feishu-openclaw helpers.js) ──────────────────
 
@@ -113,6 +148,7 @@ export async function executeOapiTool(
     case 'lark_get_user': return executeGetUser(sdk, args, opts);
     case 'lark_search_user': return executeSearchUser(sdk, args, opts);
     case 'lark_im_message': return executeImMessage(sdk, args, opts);
+    case 'lark_im_upload_image': return executeImUploadImage(sdk, args, opts);
     case 'lark_im_get_messages': return executeImGetMessages(sdk, args, opts);
     case 'lark_im_search_messages': return executeImSearchMessages(sdk, args, opts);
     case 'lark_im_fetch_resource': return executeImFetchResource(sdk, args, opts);
@@ -127,6 +163,7 @@ export async function executeOapiTool(
     case 'lark_bitable_view': return executeBitableView(sdk, args, opts);
     case 'lark_wiki_space': return executeWikiSpace(sdk, args, opts);
     case 'lark_sheet_export': return executeSheetExport(sdk, args, opts);
+    case 'lark_speech_recognize': return executeSpeechRecognize(sdk, args, opts);
     default: throw new Error(`Unknown OAPI tool: ${toolName}`);
   }
 }
@@ -901,6 +938,32 @@ async function executeSearchUser(sdk: lark.Client, args: Record<string, unknown>
   return { user_list: (res as any)?.data?.user_list };
 }
 
+// ─── IM Upload Image ────────────────────────────────────────────────────────
+
+async function executeImUploadImage(sdk: lark.Client, args: Record<string, unknown>, opts: RequestOptions): Promise<unknown> {
+  const filePath = args.file_path as string;
+  if (!filePath) throw new Error('file_path is required');
+  const safePath = assertAllowedFilePath(filePath);
+  const ext = extname(safePath).toLowerCase();
+  if (!ALLOWED_IMAGE_EXTS.has(ext)) throw new Error(`Unsupported image format: ${ext || '(none)'}. Allowed: ${[...ALLOWED_IMAGE_EXTS].join(', ')}`);
+  const stat = statSync(safePath);
+  if (stat.size > 10 * 1024 * 1024) throw new Error(`Image ${(stat.size / 1024 / 1024).toFixed(1)}MB exceeds 10MB limit`);
+
+  const imageBuffer = readFileSync(safePath);
+  const res = await sdk.im.image.create({
+    data: { image_type: 'message', image: imageBuffer },
+  } as any, opts);
+  // SDK unwraps the `data` layer — res is { image_key } directly
+  const r = res as any;
+  const imageKey = r?.image_key ?? r?.data?.image_key;
+  if (!imageKey) {
+    const code = r?.code ?? r?.data?.code ?? 'unknown';
+    const msg = r?.msg ?? r?.data?.msg ?? JSON.stringify(r?.data ?? r);
+    throw new Error(`Failed to upload image: code=${code}, msg=${msg}`);
+  }
+  return { image_key: imageKey };
+}
+
 // ─── IM Message (send/reply) ────────────────────────────────────────────────
 
 async function executeImMessage(sdk: lark.Client, args: Record<string, unknown>, opts: RequestOptions): Promise<unknown> {
@@ -1662,5 +1725,70 @@ async function executeSheetExport(sdk: lark.Client, args: Record<string, unknown
 
     default:
       throw new Error(`Unknown sheet_export action: ${args.action}`);
+  }
+}
+
+// ─── Speech Recognition (ASR) ───────────────────────────────────────────────
+
+async function executeSpeechRecognize(sdk: lark.Client, args: Record<string, unknown>, opts: RequestOptions): Promise<unknown> {
+  let audioBuffer: Buffer;
+
+  if (args.file_path) {
+    // Read from local file (sandbox validated)
+    const safePath = assertAllowedFilePath(args.file_path as string);
+    audioBuffer = readFileSync(safePath);
+  } else if (args.message_id && args.file_key) {
+    // Download from message
+    const msgId = validatePathParam(args.message_id, 'message_id');
+    const fileKey = validatePathParam(args.file_key, 'file_key');
+    const res = await sdk.im.messageResource.get({
+      params: { type: 'file' },
+      path: { message_id: msgId, file_key: fileKey },
+    }, opts);
+    const stream = (res as any).getReadableStream();
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) { chunks.push(chunk as Buffer); }
+    audioBuffer = Buffer.concat(chunks);
+  } else {
+    throw new Error('Either file_path or (message_id + file_key) is required');
+  }
+
+  // Guard against oversized audio files
+  if (audioBuffer.length > MAX_AUDIO_SIZE) {
+    throw new Error(`Audio file too large: ${(audioBuffer.length / 1024 / 1024).toFixed(1)}MB exceeds ${MAX_AUDIO_SIZE / 1024 / 1024}MB limit`);
+  }
+
+  // Convert to PCM (16kHz mono)
+  const tmpIn = join(tmpdir(), `mlb-asr-${randomBytes(4).toString('hex')}.ogg`);
+  const tmpOut = join(tmpdir(), `mlb-asr-${randomBytes(4).toString('hex')}.pcm`);
+
+  try {
+    writeFileSync(tmpIn, audioBuffer);
+    await execFileAsync('ffmpeg', [
+      '-i', tmpIn, '-f', 's16le', '-acodec', 'pcm_s16le',
+      '-ar', '16000', '-ac', '1', '-y', tmpOut,
+    ], { timeout: 30_000 });
+
+    const pcmBuffer = readFileSync(tmpOut);
+    const fileId = randomBytes(8).toString('hex');
+
+    // Call ASR API via sdk.request (uses tenant token)
+    const result = await sdk.request({
+      method: 'POST',
+      url: '/open-apis/speech_to_text/v1/speech/file_recognize',
+      data: {
+        speech: { speech: pcmBuffer.toString('base64') },
+        config: { file_id: fileId, format: 'pcm', engine_type: '16k_auto' },
+      },
+    }, opts);
+
+    return {
+      recognition_text: (result as any)?.data?.recognition_text || '',
+      audio_size: audioBuffer.length,
+      pcm_size: pcmBuffer.length,
+    };
+  } finally {
+    try { unlinkSync(tmpIn); } catch { /* ignore */ }
+    try { unlinkSync(tmpOut); } catch { /* ignore */ }
   }
 }

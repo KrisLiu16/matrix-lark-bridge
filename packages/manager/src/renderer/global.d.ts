@@ -14,6 +14,15 @@ interface MlbAPI {
     logsStop(name: string): Promise<void>;
     session(name: string): Promise<SessionState | null>;
     readConfig(name: string): Promise<BridgeConfig>;
+    files(name: string, subpath?: string): Promise<{
+      entries: { name: string; path: string; isDirectory: boolean; size: number; modifiedTime: string }[];
+      workDir: string;
+      currentPath: string;
+    }>;
+    fileContent(name: string, filePath: string, maxBytes?: number): Promise<{
+      content: string; truncated: boolean; size: number;
+    }>;
+    revealFile(name: string, filePath?: string): Promise<void>;
   };
   feishu: {
     initQR(): Promise<FeishuQRInit & { qrDataUrl: string }>;

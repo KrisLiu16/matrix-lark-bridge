@@ -272,6 +272,17 @@ export const OAPI_TOOLS: McpToolDefinition[] = [
     },
   },
   {
+    name: 'lark_im_upload_image',
+    description: '【以 Bot 身份】上传图片到飞书，获取 image_key。用于发送图片消息前的准备步骤：先用本工具上传图片获取 image_key，再用 lark_im_message 发送 msg_type=image 的消息。支持本地文件路径。限制：不超过 10MB，支持 PNG/JPEG/GIF/BMP/TIFF/WEBP。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        file_path: { type: 'string', description: '本地图片文件的绝对路径' },
+      },
+      required: ['file_path'],
+    },
+  },
+  {
     name: 'lark_im_get_messages',
     description: '【以用户身份】获取群聊或单聊的历史消息。通过 chat_id 获取群聊/单聊消息，或通过 open_id 获取与指定用户的单聊消息。支持时间范围过滤和分页。',
     inputSchema: {
@@ -507,6 +518,19 @@ export const OAPI_TOOLS: McpToolDefinition[] = [
       required: ['action'],
     },
   },
+  // ── Speech Recognition (ASR) ──
+  {
+    name: 'lark_speech_recognize',
+    description: '飞书语音识别 (ASR) 工具。将语音文件转为文字。支持两种输入方式：(1) message_id + file_key 从消息下载语音文件；(2) file_path 从本地文件读取。限制：60 秒以内音频。需要 ffmpeg 已安装。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        message_id: { type: 'string', description: '消息 ID（om_xxx），与 file_key 配合使用' },
+        file_key: { type: 'string', description: '语音文件 key（file_xxx），与 message_id 配合使用' },
+        file_path: { type: 'string', description: '本地语音文件路径（替代 message_id + file_key）' },
+      },
+    },
+  },
 ];
 
 // ─── MCP Doc Tools (HTTP relay to mcp.feishu.cn) ────────────────────────────
@@ -591,6 +615,7 @@ export const TOOL_TOKEN_MODES: Record<string, TokenMode | Record<string, TokenMo
   },
   lark_im_get_messages: 'user',       // Reading message history requires user permission
   lark_im_search_messages: 'user',    // Searching messages requires user permission
+  lark_im_upload_image: 'tenant',      // Bot uploads images for sending
   lark_im_fetch_resource: 'auto',     // Bot-received resources use TAT, user message resources use UAT
 
   // -- Calendar: all UAT --
@@ -626,6 +651,9 @@ export const TOOL_TOKEN_MODES: Record<string, TokenMode | Record<string, TokenMo
   // -- Chat: read with user --
   lark_chat: 'user',
   lark_chat_members: 'user',
+
+  // -- Speech Recognition --
+  lark_speech_recognize: 'tenant',  // ASR API uses tenant token
 
   // -- Common --
   lark_get_user: 'auto',

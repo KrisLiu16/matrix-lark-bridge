@@ -51,6 +51,8 @@ const api = {
       ipcRenderer.invoke('deepforge:logs', projectId, lines),
     taskLog: (projectId: string, taskId: string): Promise<string[]> =>
       ipcRenderer.invoke('deepforge:task-log', projectId, taskId),
+    reveal: (projectId: string): Promise<void> =>
+      ipcRenderer.invoke('deepforge:reveal', projectId),
   },
   claude: {
     check: (): Promise<{ installed: boolean; version?: string; path?: string }> =>

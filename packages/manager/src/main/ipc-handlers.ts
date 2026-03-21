@@ -409,6 +409,16 @@ export function registerIPCHandlers(
     return [];
   });
 
+  ipcMain.handle('deepforge:reveal', async (_event, projectId: string) => {
+    for (const baseDir of DEEPFORGE_DIRS) {
+      const dir = join(baseDir, projectId);
+      if (existsSync(dir)) {
+        shell.openPath(dir);
+        return;
+      }
+    }
+  });
+
   // --- System ---
 
   ipcMain.handle('app:get-workspace-root', async () => {

@@ -512,6 +512,13 @@ function ProjectDetail({
         <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${phaseColor.bg} ${phaseColor.text}`}>
           {PHASE_LABELS[project.phase] || project.phase}
         </span>
+        <button
+          onClick={() => window.mlb.deepforge.reveal(project.id)}
+          className="ml-auto text-xs px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
+          title="在访达中打开工作目录"
+        >
+          打开目录
+        </button>
       </div>
 
       {/* Info grid */}

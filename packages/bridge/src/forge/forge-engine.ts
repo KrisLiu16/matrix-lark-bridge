@@ -171,42 +171,60 @@ export class ForgeEngine {
       return;
     }
 
-    // Execute tasks sequentially (respecting potential dependencies)
-    for (const task of pending) {
+    this.log(`Executing ${pending.length} tasks in parallel (max ${this.project.maxConcurrent} concurrent)...`);
+
+    // Semaphore for concurrency control
+    let running = 0;
+    const waitSlot = () => new Promise<void>(r => {
+      const check = () => {
+        if (running < this.project.maxConcurrent) { running++; r(); }
+        else setTimeout(check, 500);
+      };
+      check();
+    });
+
+    // Execute all tasks in parallel with concurrency limit
+    await Promise.all(pending.map(async (task) => {
       const roleConfig = this.project.roles.find(r => r.name === task.role);
       if (!roleConfig) {
         this.log(`Unknown role ${task.role}, skipping`);
         task.status = 'failed';
         task.error = `Role ${task.role} not found`;
-        continue;
+        return;
       }
+
+      await waitSlot();
 
       task.status = 'running';
       task.startedAt = new Date().toISOString();
       this.persist();
       this.emit('task_start', `${task.role}: ${task.id}`, task.role, task.id);
 
-      const result = await forgeRun({
-        workDir: this.workDir,
-        model: this.project.model,
-        effort: this.project.effort,
-        systemPrompt: dynamicRolePrompt(roleConfig, this.project),
-        userPrompt: buildForgePrompt(task.role, task, this.project, this.workDir, this.state.currentIteration),
-        env: this.getEnv(),
-      });
+      try {
+        const result = await forgeRun({
+          workDir: this.workDir,
+          model: this.project.model,
+          effort: this.project.effort,
+          systemPrompt: dynamicRolePrompt(roleConfig, this.project),
+          userPrompt: buildForgePrompt(task.role, task, this.project, this.workDir, this.state.currentIteration),
+          env: this.getEnv(),
+        });
 
-      task.status = result.success ? 'completed' : 'failed';
-      task.output = result.output;
-      task.costUsd = result.costUsd;
-      task.durationMs = result.durationMs;
-      task.completedAt = new Date().toISOString();
-      task.error = result.error;
-      this.addCost(result.costUsd);
+        task.status = result.success ? 'completed' : 'failed';
+        task.output = result.output;
+        task.costUsd = result.costUsd;
+        task.durationMs = result.durationMs;
+        task.completedAt = new Date().toISOString();
+        task.error = result.error;
+        this.addCost(result.costUsd);
 
-      const icon = result.success ? '✅' : '❌';
-      this.log(`  ${task.id}: ${icon} (${result.durationMs}ms, $${result.costUsd.toFixed(2)})`);
-      this.emit(result.success ? 'task_done' : 'task_fail', `${task.role}: ${task.id}`, task.role, task.id);
-    }
+        const icon = result.success ? '✅' : '❌';
+        this.log(`  ${task.id}: ${icon} (${result.durationMs}ms, $${result.costUsd.toFixed(2)})`);
+        this.emit(result.success ? 'task_done' : 'task_fail', `${task.role}: ${task.id}`, task.role, task.id);
+      } finally {
+        running--;
+      }
+    }));
 
     this.setPhase('critiquing');
   }

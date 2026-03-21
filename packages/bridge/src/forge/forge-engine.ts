@@ -270,10 +270,16 @@ export class ForgeEngine {
       env: this.getEnv(),
     });
 
-    // Write critic feedback (this is what drives improvement)
+    // Write critic feedback, preserving user's BINDING requirements
     if (result.success && result.output) {
-      writeFileSync(join(this.workDir, 'feedback.md'),
-        `# Critic 反馈 — 迭代 ${iterNum}\n\n${result.output}`);
+      const fbPath = join(this.workDir, 'feedback.md');
+      const existing = existsSync(fbPath) ? readFileSync(fbPath, 'utf-8') : '';
+      const userBindings = existing.split('\n')
+        .filter(l => l.includes('BINDING') || l.includes('强制要求') || l.includes('必须'))
+        .join('\n');
+      const newContent = `# Critic 反馈 — 迭代 ${iterNum}\n\n${result.output}`
+        + (userBindings ? `\n\n---\n# 用户强制要求（保留）\n${userBindings}\n` : '');
+      writeFileSync(fbPath, newContent);
       writeFileSync(join(this.workDir, 'reports', 'critic-report.md'), result.output);
     }
 

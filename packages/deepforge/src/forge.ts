@@ -298,12 +298,17 @@ export class Forge {
       cost: result.cost,
     });
 
-    // Write review feedback for Writer to see next iteration
+    // Append review feedback (preserve user feedback already in the file)
     if (result.success && result.output) {
-      writeFileSync(
-        join(this.config.research.outputDir, 'review-feedback.md'),
-        `# Reviewer #2 Feedback — Iteration ${iterNum}\n\n${result.output}`
-      );
+      const feedbackPath = join(this.config.research.outputDir, 'review-feedback.md');
+      const existing = existsSync(feedbackPath) ? readFileSync(feedbackPath, 'utf-8') : '';
+      // Keep lines containing BINDING (user's hard requirements)
+      const userBindings = existing.split('\n').filter(l =>
+        l.includes('BINDING') || l.includes('强制要求') || l.includes('必须')
+      ).join('\n');
+      const newContent = `# Reviewer #2 Feedback — Iteration ${iterNum}\n\n${result.output}`
+        + (userBindings ? `\n\n---\n# 用户强制要求（保留）\n${userBindings}\n` : '');
+      writeFileSync(feedbackPath, newContent);
     }
 
     this.logger(`Reviewer: ${result.success ? '✅' : '❌'} ($${result.cost.totalCostUsd.toFixed(2)})`);

@@ -25,10 +25,12 @@ export interface ForgeProject {
   roles: ForgeRoleConfig[];
   model: string;
   effort: string;
-  maxConcurrent: number;       // 默认 5，同时运行的 CC 进程上限
+  maxConcurrent: number;       // 默认 5
   createdAt: string;
-  createdBy: string;       // open_id of the user who started it
-  chatId: string;          // where to send reports
+  createdBy: string;
+  chatId: string;
+  noCritic?: boolean;          // 跳过 Critic（默认 false，即默认有 Critic）
+  noVerifier?: boolean;        // 跳过 Verifier（默认 false）
 }
 
 // ============ State ============

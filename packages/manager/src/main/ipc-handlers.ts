@@ -319,18 +319,7 @@ export function registerIPCHandlers(
                 }
               }
             }
-            // Add forced roles based on current phase
-            const forcedRoles = ['critic', 'verifier'];
-            for (const fr of forcedRoles) {
-              const hasIt = tasks.some(t => t.role === fr);
-              if (!hasIt) {
-                const frStatus = phase === 'critiquing' && fr === 'critic' ? 'running'
-                  : phase === 'verifying' && fr === 'verifier' ? 'running'
-                  : (phase === 'iterating' || phase === 'planning') ? 'completed'
-                  : 'pending';
-                tasks.push({ role: fr, status: frStatus, description: fr === 'critic' ? '审查产出、找问题' : '核查真实性' });
-              }
-            }
+            // No longer inject forced roles — engine already adds them to tasks
           } catch { /* ignore parse errors */ }
         }
 
@@ -550,6 +539,14 @@ export function registerIPCHandlers(
     } catch (err) {
       throw new Error(`Failed to delete project directory: ${(err as Error).message}`);
     }
+  });
+
+  ipcMain.handle('deepforge:inject', async (_event, projectId: string, message: string) => {
+    const projectDir = findProjectDir(projectId);
+    if (!projectDir) throw new Error(`DeepForge project not found: ${projectId}`);
+    const { appendFileSync } = require('node:fs');
+    const fbPath = join(projectDir, 'feedback.md');
+    appendFileSync(fbPath, `\n\n# 用户反馈 — ${new Date().toISOString()}\n${message}\n`);
   });
 
   // --- System ---

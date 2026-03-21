@@ -59,6 +59,8 @@ const api = {
       ipcRenderer.invoke('deepforge:resume', projectId),
     delete: (projectId: string): Promise<void> =>
       ipcRenderer.invoke('deepforge:delete', projectId),
+    inject: (projectId: string, message: string): Promise<void> =>
+      ipcRenderer.invoke('deepforge:inject', projectId, message),
   },
   claude: {
     check: (): Promise<{ installed: boolean; version?: string; path?: string }> =>

@@ -84,10 +84,20 @@ export class ForgeEngine {
             await this.executeDynamic();
             break;
           case 'critiquing':
-            await this.runCritic();
+            if (this.project.noCritic) {
+              this.log('Critic skipped (disabled)');
+              this.setPhase('verifying');
+            } else {
+              await this.runCritic();
+            }
             break;
           case 'verifying':
-            await this.runVerifier();
+            if (this.project.noVerifier) {
+              this.log('Verifier skipped (disabled)');
+              this.setPhase('iterating');
+            } else {
+              await this.runVerifier();
+            }
             break;
           case 'iterating':
             await this.iterate();

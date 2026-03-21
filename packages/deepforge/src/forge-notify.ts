@@ -37,10 +37,13 @@ export class ForgeNotifier {
   getPending(): ForgeNotification[] {
     try {
       const files = readdirSync(this.pendingDir).filter(f => f.endsWith('.json'));
-      return files.map(f => {
-        const data = JSON.parse(readFileSync(join(this.pendingDir, f), 'utf-8'));
-        return data as ForgeNotification;
-      });
+      const results: ForgeNotification[] = [];
+      for (const f of files) {
+        try {
+          results.push(JSON.parse(readFileSync(join(this.pendingDir, f), 'utf-8')));
+        } catch { /* skip corrupted */ }
+      }
+      return results;
     } catch {
       return [];
     }

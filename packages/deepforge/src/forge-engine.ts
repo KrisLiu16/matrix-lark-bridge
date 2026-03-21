@@ -453,15 +453,16 @@ export class ForgeEngine {
   }
 
   private fallbackTasks(iterNum: number): ForgeTask[] {
-    // Use first dynamic role as fallback
+    // Always return at least one task to prevent empty iteration loops
     const first = this.project.roles[0];
-    return first ? [{
-      id: `${first.name}-${iterNum}-fallback`,
-      role: first.name,
+    const roleName = first?.name || 'writer';
+    return [{
+      id: `${roleName}-${iterNum}-fallback`,
+      role: roleName,
       description: `继续推进项目 ${this.project.title}`,
       priority: 'medium' as const,
       status: 'pending' as const,
-    }] : [];
+    }];
   }
 
   private validateIndex(): string[] {

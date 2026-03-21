@@ -20,11 +20,13 @@ export class ForgeManager {
 
     this.engines.set(project.id, engine);
 
-    // Run in background (non-blocking)
+    // Run in background (non-blocking), clean up on finish
     engine.run().then(() => {
-      console.log(`[forge:${project.id}] Completed`);
+      console.log(`[deepforge:${project.id}] Completed`);
+      this.engines.delete(project.id);
     }).catch((err) => {
-      console.error(`[forge:${project.id}] Fatal:`, err);
+      console.error(`[deepforge:${project.id}] Fatal:`, err);
+      this.engines.delete(project.id);
     });
 
     return project.id;

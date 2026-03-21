@@ -59,11 +59,9 @@ export function buildForgePrompt(
     if (iterLog) parts.push(`## 迭代日志\n${iterLog}`);
   }
 
-  // Writer/Leader/Critic see feedback
-  if (['leader', 'critic'].includes(role) || project.roles.some(r => r.name === role)) {
-    const feedback = safe(join(workDir, 'feedback.md'));
-    if (feedback) parts.push(`## 反馈（Critic + 用户）\n${feedback}`);
-  }
+  // All roles see feedback (Critic's negative feedback + user requirements)
+  const feedback = safe(join(workDir, 'feedback.md'));
+  if (feedback) parts.push(`## 反馈（Critic + 用户）\n${feedback}`);
 
   // === Layer 2: File listing (Agent reads on demand) ===
   const files = listFiles(join(workDir, 'artifacts'));

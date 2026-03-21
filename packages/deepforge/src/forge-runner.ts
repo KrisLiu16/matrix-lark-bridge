@@ -61,8 +61,8 @@ export async function forgeRun(opts: ForgeRunOpts): Promise<ForgeRunResult> {
     };
 
     const timer = setTimeout(() => {
-      finish(false, `Timeout after ${(opts.timeoutMs || 1800000) / 1000}s`);
-    }, opts.timeoutMs || 1800000);
+      finish(false, `Timeout after ${(opts.timeoutMs || 3600000) / 1000}s`);
+    }, opts.timeoutMs || 3600000);
 
     try {
       proc = spawn(shell, ['-l', '-c', cmdLine], {

@@ -261,9 +261,10 @@ export function registerIPCHandlers(
       currentIteration: number;
       totalIterations: number;
       totalCostUsd: number;
+      totalTokens: number;
       isRunning: boolean;
       source: string;
-      tasks: { role: string; status: string }[];
+      tasks: { role: string; status: string; description?: string; error?: string; output?: string; startedAt?: string }[];
     }[] = [];
 
     for (const baseDir of FORGE_DIRS) {
@@ -284,7 +285,8 @@ export function registerIPCHandlers(
         let currentIteration = 0;
         let totalIterations = 0;
         let totalCostUsd = 0;
-        const tasks: { role: string; status: string }[] = [];
+        let totalTokens = 0;
+        const tasks: { role: string; status: string; description?: string; error?: string; output?: string; startedAt?: string }[] = [];
 
         if (existsSync(statePath)) {
           try {
@@ -292,14 +294,28 @@ export function registerIPCHandlers(
             phase = stateData.phase || 'unknown';
             currentIteration = stateData.currentIteration || 0;
             totalIterations = Array.isArray(stateData.iterations) ? stateData.iterations.length : 0;
-            totalCostUsd = stateData.totalCostUsd || 0;
+            // Handle both flat totalCostUsd and nested totalCost.totalCostUsd
+            const tc = stateData.totalCost;
+            if (tc && typeof tc === 'object') {
+              totalCostUsd = tc.totalCostUsd || 0;
+              totalTokens = (tc.inputTokens || 0) + (tc.outputTokens || 0);
+            } else {
+              totalCostUsd = stateData.totalCostUsd || 0;
+            }
 
-            // Extract tasks from latest iteration
+            // Extract tasks from latest iteration (with details)
             if (Array.isArray(stateData.iterations) && stateData.iterations.length > 0) {
               const latestIter = stateData.iterations[stateData.iterations.length - 1];
               if (Array.isArray(latestIter.tasks)) {
                 for (const task of latestIter.tasks) {
-                  tasks.push({ role: task.role || 'unknown', status: task.status || 'unknown' });
+                  tasks.push({
+                    role: task.role || 'unknown',
+                    status: task.status || 'unknown',
+                    description: task.description,
+                    error: task.error,
+                    output: task.output?.substring(0, 500),
+                    startedAt: task.startedAt,
+                  });
                 }
               }
             }
@@ -339,6 +355,7 @@ export function registerIPCHandlers(
           currentIteration,
           totalIterations,
           totalCostUsd,
+          totalTokens,
           isRunning,
           source: baseDir.includes('.deepforge') ? 'deepforge' : 'forge',
           tasks,

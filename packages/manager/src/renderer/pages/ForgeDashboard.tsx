@@ -170,7 +170,7 @@ function ProjectCard({ project, onClick }: { project: ForgeProject; onClick: () 
           迭代 {project.currentIteration}/{project.totalIterations || '?'}
         </span>
         <span className="flex items-center gap-1">
-          {Math.round(project.totalCostUsd * 5000).toLocaleString()} tokens
+          {(project.totalTokens || 0).toLocaleString()} tokens
         </span>
         <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-400">
           {project.source}

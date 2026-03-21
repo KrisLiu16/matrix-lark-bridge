@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback } from 'react';
+import React, { useEffect, useCallback, useState } from 'react';
 import { useBridgeStore } from './stores/bridge-store';
 import { useClaudeSetupStore } from './stores/claude-setup-store';
 import { useI18n } from './i18n';
@@ -114,6 +114,7 @@ export default function App() {
             {t('statusbar.running', { count: runningCount })}
           </span>
           <span className="ml-auto flex items-center gap-3">
+            <UpdateHint />
             <button
               onClick={async () => {
                 if (!confirm('卸载内置 Claude Code？\n\n仅删除 ~/.mlb/bin/claude，不影响系统中其他 Claude Code。')) return;
@@ -255,5 +256,36 @@ function formatLastActivity(iso?: string): string {
   } catch {
     return '';
   }
+}
+
+/** Small update hint in status bar — shows error if update check failed */
+function UpdateHint() {
+  const [status, setStatus] = useState<'checking' | 'latest' | 'error' | 'update'>('checking');
+  const [version, setVersion] = useState('');
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      window.mlb.system.checkUpdate()
+        .then((info) => {
+          if (info?.hasUpdate) {
+            setStatus('update');
+            setVersion(info.version || '');
+          } else {
+            setStatus('latest');
+          }
+        })
+        .catch(() => setStatus('error'));
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  if (status === 'checking' || status === 'latest') return null;
+  if (status === 'error') {
+    return <span className="text-[10px] text-amber-400" title="自动更新检查失败">更新检查失败</span>;
+  }
+  if (status === 'update') {
+    return <span className="text-[10px] text-indigo-400">有新版本 v{version}</span>;
+  }
+  return null;
 }
 

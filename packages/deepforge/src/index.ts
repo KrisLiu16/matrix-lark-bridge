@@ -253,6 +253,65 @@ switch (command) {
     break;
   }
 
+  case 'resume': {
+    if (values.help) {
+      console.log(`
+  deepforge resume <项目ID> [消息] — 恢复已暂停/已完成的项目
+
+  可选消息会写入 feedback.md，Leader 立即按新方向迭代。
+
+  示例:
+    deepforge resume my-project
+    deepforge resume my-project "改用方案 B，重点对比钉钉"
+`);
+      process.exit(0);
+    }
+    const id = positionals[1];
+    if (!id) { console.error('用法: deepforge resume <项目ID> [消息]'); process.exit(1); }
+    const projectDir = join(process.env.HOME || '/tmp', '.deepforge', 'projects', id);
+    const statePath = join(projectDir, 'forge-state.json');
+    if (!existsSync(statePath)) { console.error(`Project not found: ${id}`); process.exit(1); }
+
+    // Inject message if provided
+    const message = positionals.slice(2).join(' ');
+    if (message) {
+      appendFileSync(join(projectDir, 'feedback.md'),
+        `\n\n# 用户新指令（立即执行）— ${new Date().toISOString()}\n\n${message}\n\n**重要：请立即按照此指令调整方向，不要等下一轮。**\n`);
+      console.log(`Feedback injected: ${message}`);
+    }
+
+    // Load config
+    let configFile: string | null = null;
+    for (const cfgName of ['forge-project.json', 'deepforge.json']) {
+      const cfgPath = join(projectDir, cfgName);
+      if (existsSync(cfgPath)) { configFile = cfgPath; break; }
+    }
+    if (!configFile) { console.error('Config file not found in project dir'); process.exit(1); }
+
+    const project: ForgeProject = JSON.parse(readFileSync(configFile, 'utf-8'));
+    project.model = project.model || process.env.DEEPFORGE_MODEL || 'opus[1m]';
+    project.effort = project.effort || process.env.DEEPFORGE_EFFORT || 'max';
+    project.maxConcurrent = project.maxConcurrent || parseInt(process.env.DEEPFORGE_MAX_CONCURRENT || '5', 10);
+
+    // Reset phase to planning
+    const state = JSON.parse(readFileSync(statePath, 'utf-8'));
+    state.phase = 'planning';
+    writeFileSync(statePath, JSON.stringify(state, null, 2));
+
+    console.log(`Resuming project ${id}...`);
+    const engine = new ForgeEngine(project, {
+      log: (msg) => {
+        const t = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+        console.log(`[${t}] [forge] ${msg}`);
+      },
+    });
+
+    process.on('SIGINT', () => { console.log('\nStopping...'); engine.stop(); });
+    process.on('SIGTERM', () => engine.stop());
+    await engine.run();
+    break;
+  }
+
   default:
     console.error(`Unknown command: ${command}`);
     process.exit(1);

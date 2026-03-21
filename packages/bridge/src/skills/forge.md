@@ -13,47 +13,149 @@ description: |
 
 ## 什么是 Forge
 
-Forge 让你启动一个 AI 团队，持续自主地完成复杂任务。团队由一个 Leader（负责人）统管，
-多个专业角色协作，每轮迭代都有 Critic（批评家）找问题，Verifier（核查员）查真实性。
+Forge 是独立的 CLI 工具，启动多个 CC 进程组成团队，自主迭代完成复杂任务。
+每个角色是一个真正独立的 CC 进程，不是子 agent。
 
-## 适用场景
+## 启动流程（必须遵守）
 
-- 写研究论文（文献调研→实验→写作→审稿→迭代打磨）
-- 开发软件项目（设计→编码→测试→审查→迭代）
-- 做竞品分析报告
-- 准备技术方案文档
-- 任何需要持续迭代和多角色协作的任务
+### 第一步：需求对齐（卡片交互）
 
-## 启动方式
+用户提出任务后，发一张飞书卡片展示你的理解，让用户确认或继续补充：
 
-用户说出任务需求后，和用户确认以下信息：
+```
+卡片标题：Forge 项目设定
 
-1. **项目标题**：简短描述
-2. **项目描述**：详细说明目标和范围
-3. **团队角色**：根据任务设计 2-5 个专业角色（Leader/Critic/Verifier 自动包含）
+项目：竞品分析报告
+描述：对比我们的产品和 Slack、钉钉、企业微信
 
-然后构造 ForgeProject 并调用 ForgeManager.start()。
+拟定团队：
+  - 市场调研员：搜集各竞品功能、定价、用户量
+  - 数据分析师：制作对比矩阵、优劣势分析
+  - 报告撰写员：生成分析报告文档
 
-## 角色设计指南
+强制角色（自动包含）：
+  - Leader：统管规划
+  - Critic：每轮找问题
+  - Verifier：核查真实性
 
-每个任务需要不同的角色组合。Leader 自动存在，你只需设计专业角色：
+按钮：[确认启动] [我还要补充]
+```
 
-| 任务类型 | 建议角色 |
-|---------|---------|
-| 研究论文 | 文献研究员、实验员、论文撰写员 |
-| 软件开发 | 架构师、开发者、测试工程师 |
-| 竞品分析 | 市场调研员、数据分析师、报告撰写员 |
-| 技术方案 | 架构师、文档编写员、评审员 |
+用户点"我还要补充"或者直接说话 → 更新设定，再发一张卡片确认。
+用户点"确认启动"或者说"确认"/"启动"/"开始" → 进入第二步。
 
-## 强制角色（不可跳过）
+**循环直到用户确认，不要跳过这一步。**
 
-- **Critic**：每轮必须执行，找出所有问题，给负反馈。禁止说"做得好"。
-- **Verifier**：核查产出真实性，发现虚构可阻断流程。
+### 第二步：写配置文件
 
-## 中途查看
+根据确认的设定，生成 forge-project.json：
 
-用户问"我的XX项目怎么样了"时，读取对应项目的 forge-state.json 汇报状态。
+```json
+{
+  "id": "competitive-analysis-2026",
+  "title": "竞品分析报告",
+  "description": "对比我们的产品和 Slack、钉钉、企业微信...",
+  "roles": [
+    {
+      "name": "researcher",
+      "label": "市场调研员",
+      "description": "搜集各竞品的功能、定价、用户量数据",
+      "systemPrompt": "你是市场调研员，负责..."
+    },
+    {
+      "name": "analyst",
+      "label": "数据分析师",
+      "description": "制作对比矩阵和优劣势分析",
+      "systemPrompt": "你是数据分析师，负责..."
+    },
+    {
+      "name": "writer",
+      "label": "报告撰写员",
+      "description": "生成分析报告文档",
+      "systemPrompt": "你是报告撰写员，负责..."
+    }
+  ],
+  "model": "opus[1m]",
+  "effort": "max",
+  "maxConcurrent": 5,
+  "createdAt": "2026-03-21T11:50:00Z",
+  "createdBy": "ou_xxx",
+  "chatId": "oc_xxx"
+}
+```
 
-## 注入反馈
+保存到 `~/.forge/projects/<id>/forge-project.json`
 
-用户想调整方向时，将反馈写入项目工作区的 feedback.md，下一轮 Leader 会自动读取。
+### 第三步：启动 Forge
+
+用 Bash 执行：
+
+```bash
+nohup forge start --config ~/.forge/projects/<id>/forge-project.json \
+  >> ~/.forge/projects/<id>/forge.log 2>&1 &
+disown
+echo $! > ~/.forge/projects/<id>/forge.pid
+```
+
+告诉用户：已启动，PID 多少，工作区在哪。
+
+### 第四步：设定自动监控
+
+启动后立即用 CronCreate 设定定时巡检任务：
+
+```
+每 30 分钟检查 Forge 项目 <id>：
+1. 检查进程存活（ps -p PID）
+2. 读取 forge-state.json 获取 phase/iteration/cost
+3. 读取最近的 reports/*.md
+4. 如果进程挂了 → 分析 forge.log → 重启
+5. 生成飞书文档报告，发送给用户
+```
+
+**重要**：同时在项目配置中记录监控需求，这样即使 CC 重启，
+看到配置后也知道要恢复监控任务。
+
+在 `~/.forge/registry.json` 中记录：
+
+```json
+{
+  "projects": {
+    "<id>": {
+      "configPath": "~/.forge/projects/<id>/forge-project.json",
+      "status": "running",
+      "monitor": {
+        "enabled": true,
+        "intervalMinutes": 30,
+        "chatId": "oc_xxx"
+      }
+    }
+  }
+}
+```
+
+CC 启动时应检查 registry.json，对所有 status=running 且 monitor.enabled=true 的项目
+自动恢复 CronCreate 定时巡检。
+
+## 中途交互
+
+### 用户问进展
+读取 `~/.forge/projects/<id>/forge-state.json` 和 `reports/`，汇报状态。
+
+### 用户注入反馈
+将反馈写入 `~/.forge/projects/<id>/feedback.md`：
+```bash
+forge inject <id> "用户的反馈内容"
+```
+或直接用 Write 工具追加到 feedback.md。
+
+### 用户要看产出
+读取 artifacts/ 目录下的文件，或发送 PDF/文档给用户。
+
+## 监控恢复
+
+CC 重启后，检查 `~/.forge/registry.json`：
+1. 遍历所有 status=running 的项目
+2. 检查进程是否存活（读 pid 文件 → ps 检查）
+3. 如果进程挂了 → 重启
+4. 对 monitor.enabled=true 的项目 → CronCreate 恢复定时巡检
+5. 通知用户："已恢复对 X 个 Forge 项目的监控"

@@ -1,157 +1,89 @@
 /**
- * DeepForge — Type Definitions
+ * Forge — Multi-Agent Orchestration Module (within bridge)
+ * Generic types for dynamic team composition and iterative execution.
  */
 
-// ============ Agent Roles ============
+// ============ Dynamic Role ============
 
-export const AGENT_ROLES = ['leader', 'scout', 'ideator', 'coder', 'bench', 'writer', 'verifier', 'reviewer'] as const;
-export type AgentRole = typeof AGENT_ROLES[number];
-
-// ============ Configuration ============
-
-export interface AgentConfig {
-  enabled: boolean;
-  model: string;
-  effort?: 'low' | 'medium' | 'high' | 'max';
-  timeoutMs?: number;
+export interface ForgeRoleConfig {
+  name: string;           // e.g., "market_researcher", "backend_dev"
+  label: string;          // Display name: "市场调研员", "后端开发"
+  description: string;    // What this role does
+  systemPrompt: string;   // Full system prompt for this role's CC
 }
 
-export interface FeishuConfig {
-  appId: string;
-  appSecret: string;
-  apiBaseUrl?: string;
-  reportChatId: string;
-  reportIntervalMinutes: number;
-}
+// Framework-enforced roles (always present, cannot be skipped)
+export const FORCED_ROLES = ['leader', 'critic', 'verifier'] as const;
+export type ForcedRole = typeof FORCED_ROLES[number];
 
-export interface DeepForgeConfig {
-  research: {
-    topic: string;
-    description: string;
-    maxIterations: number;
-    outputDir: string;
-    workDir: string;
-  };
-  agents: Record<AgentRole, AgentConfig>;
-  limits: {
-    maxTotalCostUsd: number;
-    maxIterationCostUsd: number;
-    maxConcurrentAgents: number;
-  };
-  feishu?: FeishuConfig;
-  claude: {
-    binaryPath?: string;
-    env?: Record<string, string>;
-  };
-}
+// ============ Forge Project ============
 
-// ============ Research State ============
-
-export type ResearchPhase =
-  | 'initializing'
-  | 'planning'
-  | 'researching'
-  | 'ideating'
-  | 'coding'
-  | 'benchmarking'
-  | 'writing'
-  | 'verifying'
-  | 'reviewing'
-  | 'iterating'
-  | 'completed'
-  | 'paused'
-  | 'failed';
-
-export interface CostSummary {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheCreateTokens: number;
-  totalCostUsd: number;
-}
-
-export interface TaskState {
+export interface ForgeProject {
   id: string;
-  role: AgentRole;
+  title: string;
+  description: string;
+  roles: ForgeRoleConfig[];
+  model: string;
+  effort: string;
+  maxConcurrent: number;       // 默认 5，同时运行的 CC 进程上限
+  createdAt: string;
+  createdBy: string;       // open_id of the user who started it
+  chatId: string;          // where to send reports
+}
+
+// ============ State ============
+
+export type ForgePhase =
+  | 'setup'         // Leader designs team (only iteration 0)
+  | 'planning'      // Leader plans this iteration
+  | 'executing'     // Dynamic roles execute in sequence
+  | 'critiquing'    // Critic reviews all output (forced)
+  | 'verifying'     // Verifier checks facts (forced)
+  | 'iterating'     // Leader summarizes and decides next
+  | 'paused'
+  | 'completed';
+
+export interface ForgeTask {
+  id: string;
+  role: string;
   description: string;
   priority: 'high' | 'medium' | 'low';
-  context: string;
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+  status: 'pending' | 'running' | 'completed' | 'failed';
   output?: string;
-  cost?: CostSummary;
+  costUsd?: number;
+  durationMs?: number;
   startedAt?: string;
   completedAt?: string;
   error?: string;
-  retryCount: number;
 }
 
-export interface IterationState {
+export interface ForgeIteration {
   number: number;
-  phase: ResearchPhase;
-  tasks: TaskState[];
-  leaderPlan?: string;
+  tasks: ForgeTask[];
+  criticFeedback?: string;
+  verifierResult?: string;
   leaderSummary?: string;
-  reviewFeedback?: string;
-  cost: CostSummary;
+  costUsd: number;
   startedAt: string;
   completedAt?: string;
 }
 
 export interface ForgeState {
-  id: string;
-  phase: ResearchPhase;
+  projectId: string;
+  phase: ForgePhase;
   currentIteration: number;
-  iterations: IterationState[];
-  totalCost: CostSummary;
+  iterations: ForgeIteration[];
+  totalCostUsd: number;
   consecutiveFailures: number;
-  createdAt: string;
   updatedAt: string;
-  error?: string;
 }
 
-// ============ Agent Runner ============
-
-export interface AgentRunResult {
-  output: string;
-  cost: CostSummary;
-  sessionId?: string;
-  success: boolean;
-  error?: string;
-  durationMs: number;
-}
-
-// ============ Events (for CLI dashboard) ============
-
-export type ForgeEventType =
-  | 'phase_change'
-  | 'task_start'
-  | 'task_complete'
-  | 'task_fail'
-  | 'iteration_start'
-  | 'iteration_complete'
-  | 'alert'
-  | 'report_sent'
-  | 'cost_update';
+// ============ Events ============
 
 export interface ForgeEvent {
-  type: ForgeEventType;
-  timestamp: string;
-  role?: AgentRole;
-  taskId?: string;
+  type: 'phase' | 'task_start' | 'task_done' | 'task_fail' | 'critic' | 'alert';
   message: string;
-  data?: Record<string, unknown>;
-}
-
-export function zeroCost(): CostSummary {
-  return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0, totalCostUsd: 0 };
-}
-
-export function addCost(a: CostSummary, b: CostSummary): CostSummary {
-  return {
-    inputTokens: a.inputTokens + b.inputTokens,
-    outputTokens: a.outputTokens + b.outputTokens,
-    cacheReadTokens: a.cacheReadTokens + b.cacheReadTokens,
-    cacheCreateTokens: a.cacheCreateTokens + b.cacheCreateTokens,
-    totalCostUsd: a.totalCostUsd + b.totalCostUsd,
-  };
+  role?: string;
+  taskId?: string;
+  timestamp: string;
 }

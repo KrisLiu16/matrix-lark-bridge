@@ -1,0 +1,135 @@
+/**
+ * Forge Runner — Spawn a Claude Code process, send prompt, collect result.
+ * Standalone — no dependency on bridge's ClaudeSession.
+ */
+import { spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
+const DEFAULT_CC_PATH = join(homedir(), '.mlb', 'bin', 'claude');
+
+export interface ForgeRunOpts {
+  workDir: string;
+  model: string;
+  effort: string;
+  systemPrompt: string;
+  userPrompt: string;
+  claudePath?: string;
+  env?: Record<string, string>;
+  timeoutMs?: number;
+}
+
+export interface ForgeRunResult {
+  output: string;
+  costUsd: number;
+  durationMs: number;
+  success: boolean;
+  error?: string;
+}
+
+export async function forgeRun(opts: ForgeRunOpts): Promise<ForgeRunResult> {
+  const start = Date.now();
+  const claudePath = opts.claudePath || process.env.CLAUDE_PATH || DEFAULT_CC_PATH;
+
+  const args = [
+    '--output-format', 'stream-json',
+    '--input-format', 'stream-json',
+    '--verbose',
+    '--permission-mode', 'bypassPermissions',
+    '--model', opts.model,
+  ];
+
+  if (opts.effort) args.push('--effort', opts.effort);
+  if (opts.systemPrompt) args.push('--append-system-prompt', opts.systemPrompt);
+
+  const shell = process.env.SHELL || '/bin/sh';
+  const cmdLine = `"${claudePath}" ${args.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}`;
+
+  return new Promise<ForgeRunResult>((resolve) => {
+    let output = '';
+    let costUsd = 0;
+    let done = false;
+    let proc: ReturnType<typeof spawn> | null = null;
+
+    const finish = (success: boolean, error?: string) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try { proc?.stdin?.end(); proc?.kill('SIGTERM'); } catch { /* ignore */ }
+      resolve({ output, costUsd, durationMs: Date.now() - start, success, error });
+    };
+
+    const timer = setTimeout(() => {
+      finish(false, `Timeout after ${(opts.timeoutMs || 1800000) / 1000}s`);
+    }, opts.timeoutMs || 1800000);
+
+    try {
+      proc = spawn(shell, ['-l', '-c', cmdLine], {
+        cwd: opts.workDir,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env, ...(opts.env || {}) },
+      });
+    } catch (err) {
+      finish(false, `Failed to spawn CC: ${(err as Error).message}`);
+      return;
+    }
+
+    proc.on('error', (err) => finish(false, `Process error: ${err.message}`));
+    proc.on('exit', (code) => { if (!done) finish(code === 0); });
+
+    if (proc.stderr) {
+      createInterface({ input: proc.stderr }).on('line', () => {});
+    }
+
+    if (proc.stdout) {
+      const rl = createInterface({ input: proc.stdout });
+      rl.on('line', (line) => {
+        if (!line.trim()) return;
+        let data: any;
+        try { data = JSON.parse(line); } catch { return; }
+
+        switch (data.type) {
+          case 'assistant': {
+            const msg = data.message;
+            if (msg?.content && Array.isArray(msg.content)) {
+              for (const block of msg.content) {
+                if (block.type === 'text') output += block.text;
+              }
+            }
+            break;
+          }
+          case 'result': {
+            if (typeof data.total_cost_usd === 'number') costUsd = data.total_cost_usd;
+            const isError = data.is_error === true || data.subtype === 'error_during_execution';
+            finish(!isError, isError ? output : undefined);
+            break;
+          }
+          case 'error':
+            finish(false, data.content);
+            break;
+          case 'control_request': {
+            if (proc?.stdin) {
+              proc.stdin.write(JSON.stringify({
+                type: 'control_response',
+                response: {
+                  subtype: 'success',
+                  request_id: data.request_id,
+                  response: { behavior: 'allow', updatedInput: data.request?.input || {} },
+                },
+              }) + '\n');
+            }
+            break;
+          }
+        }
+      });
+    }
+
+    if (proc?.stdin) {
+      proc.stdin.write(JSON.stringify({
+        type: 'user',
+        message: { role: 'user', content: opts.userPrompt },
+      }) + '\n');
+    }
+  });
+}

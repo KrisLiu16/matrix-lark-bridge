@@ -9,7 +9,7 @@ interface BridgeStore {
   error: string | null;
 
   // Current page state
-  currentPage: 'list' | 'config' | 'new' | 'logs' | 'session' | 'files';
+  currentPage: 'list' | 'config' | 'new' | 'logs' | 'session' | 'files' | 'forge';
   selectedBridge: string | null;
 
   // Actions
@@ -22,7 +22,7 @@ interface BridgeStore {
   updateConfig: (name: string, config: Partial<BridgeConfig>) => Promise<void>;
 
   // Navigation
-  navigate: (page: 'list' | 'config' | 'new' | 'logs' | 'session' | 'files', bridgeName?: string) => void;
+  navigate: (page: 'list' | 'config' | 'new' | 'logs' | 'session' | 'files' | 'forge', bridgeName?: string) => void;
 }
 
 export const useBridgeStore = create<BridgeStore>((set, get) => ({

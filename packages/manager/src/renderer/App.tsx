@@ -11,6 +11,7 @@ import NewBridge from './pages/NewBridge';
 import LogViewer from './pages/LogViewer';
 import SessionViewer from './pages/SessionViewer';
 import FileManager from './pages/FileManager';
+import ForgeDashboard from './pages/ForgeDashboard';
 
 export default function App() {
   const { currentPage, selectedBridge, fetchBridges, navigate, bridges } = useBridgeStore();
@@ -61,6 +62,8 @@ export default function App() {
         return selectedBridge ? <SessionViewer name={selectedBridge} /> : <EmptyState t={t} />;
       case 'files':
         return selectedBridge ? <FileManager name={selectedBridge} /> : <EmptyState t={t} />;
+      case 'forge':
+        return <ForgeDashboard />;
       default:
         return selectedBridge ? <BridgeDetail name={selectedBridge} /> : <EmptyState t={t} />;
     }

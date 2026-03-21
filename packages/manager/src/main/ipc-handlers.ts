@@ -246,6 +246,140 @@ export function registerIPCHandlers(
     }
   });
 
+  // --- Forge projects ---
+
+  const FORGE_DIRS = [
+    join(homedir(), '.forge', 'projects'),
+    join(homedir(), '.deepforge', 'projects'),
+  ];
+
+  ipcMain.handle('forge:list', async () => {
+    const projects: {
+      id: string;
+      title: string;
+      phase: string;
+      currentIteration: number;
+      totalIterations: number;
+      totalCostUsd: number;
+      isRunning: boolean;
+      source: string;
+      tasks: { role: string; status: string }[];
+    }[] = [];
+
+    for (const baseDir of FORGE_DIRS) {
+      if (!existsSync(baseDir)) continue;
+      let entries: string[];
+      try { entries = readdirSync(baseDir); } catch { continue; }
+
+      for (const id of entries) {
+        const projectDir = join(baseDir, id);
+        try {
+          const stat = statSync(projectDir);
+          if (!stat.isDirectory()) continue;
+        } catch { continue; }
+
+        // Read state
+        const statePath = join(projectDir, 'forge-state.json');
+        let phase = 'unknown';
+        let currentIteration = 0;
+        let totalIterations = 0;
+        let totalCostUsd = 0;
+        const tasks: { role: string; status: string }[] = [];
+
+        if (existsSync(statePath)) {
+          try {
+            const stateData = JSON.parse(readFileSync(statePath, 'utf-8'));
+            phase = stateData.phase || 'unknown';
+            currentIteration = stateData.currentIteration || 0;
+            totalIterations = Array.isArray(stateData.iterations) ? stateData.iterations.length : 0;
+            totalCostUsd = stateData.totalCostUsd || 0;
+
+            // Extract tasks from latest iteration
+            if (Array.isArray(stateData.iterations) && stateData.iterations.length > 0) {
+              const latestIter = stateData.iterations[stateData.iterations.length - 1];
+              if (Array.isArray(latestIter.tasks)) {
+                for (const task of latestIter.tasks) {
+                  tasks.push({ role: task.role || 'unknown', status: task.status || 'unknown' });
+                }
+              }
+            }
+          } catch { /* ignore parse errors */ }
+        }
+
+        // Read project config for title
+        let title = id;
+        for (const cfgName of ['forge-project.json', 'deepforge.json']) {
+          const cfgPath = join(projectDir, cfgName);
+          if (existsSync(cfgPath)) {
+            try {
+              const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8'));
+              if (cfg.title) title = cfg.title;
+            } catch { /* ignore */ }
+            break;
+          }
+        }
+
+        // Check if running
+        const pidPath = join(projectDir, 'forge.pid');
+        let isRunning = false;
+        if (existsSync(pidPath)) {
+          try {
+            const pid = parseInt(readFileSync(pidPath, 'utf-8').trim(), 10);
+            if (pid > 0) {
+              process.kill(pid, 0); // throws if process doesn't exist
+              isRunning = true;
+            }
+          } catch { /* not running */ }
+        }
+
+        projects.push({
+          id,
+          title,
+          phase,
+          currentIteration,
+          totalIterations,
+          totalCostUsd,
+          isRunning,
+          source: baseDir.includes('.deepforge') ? 'deepforge' : 'forge',
+          tasks,
+        });
+      }
+    }
+
+    return projects;
+  });
+
+  ipcMain.handle('forge:status', async (_event, projectId: string) => {
+    for (const baseDir of FORGE_DIRS) {
+      const statePath = join(baseDir, projectId, 'forge-state.json');
+      if (existsSync(statePath)) {
+        try {
+          return JSON.parse(readFileSync(statePath, 'utf-8'));
+        } catch (err) {
+          throw new Error(`Failed to parse forge-state.json: ${(err as Error).message}`);
+        }
+      }
+    }
+    throw new Error(`Forge project not found: ${projectId}`);
+  });
+
+  ipcMain.handle('forge:logs', async (_event, projectId: string, lineCount?: number) => {
+    const maxLines = lineCount || 50;
+    for (const baseDir of FORGE_DIRS) {
+      const logPath = join(baseDir, projectId, 'forge.log');
+      if (existsSync(logPath)) {
+        try {
+          const content = readFileSync(logPath, 'utf-8');
+          const allLines = content.split('\n');
+          return allLines.slice(-maxLines);
+        } catch (err) {
+          throw new Error(`Failed to read forge.log: ${(err as Error).message}`);
+        }
+      }
+    }
+    return [];
+  });
+
   // --- System ---
 
   ipcMain.handle('app:get-workspace-root', async () => {

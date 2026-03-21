@@ -40,6 +40,16 @@ const api = {
     disable: (name: string): Promise<void> => ipcRenderer.invoke('autostart:disable', name),
     status: (name: string): Promise<boolean> => ipcRenderer.invoke('autostart:status', name),
   },
+  forge: {
+    list: (): Promise<{
+      id: string; title: string; phase: string; currentIteration: number;
+      totalIterations: number; totalCostUsd: number; isRunning: boolean;
+      source: string; tasks: { role: string; status: string }[];
+    }[]> => ipcRenderer.invoke('forge:list'),
+    status: (projectId: string): Promise<any> => ipcRenderer.invoke('forge:status', projectId),
+    logs: (projectId: string, lines?: number): Promise<string[]> =>
+      ipcRenderer.invoke('forge:logs', projectId, lines),
+  },
   claude: {
     check: (): Promise<{ installed: boolean; version?: string; path?: string }> =>
       ipcRenderer.invoke('claude:check'),

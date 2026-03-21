@@ -7,9 +7,10 @@ export interface DeepForgeProject {
   currentIteration: number;
   totalIterations: number;
   totalCostUsd: number;
+  totalTokens: number;
   isRunning: boolean;
   source: string;
-  tasks: { role: string; status: string; description?: string; error?: string; output?: string; startedAt?: number }[];
+  tasks: { role: string; status: string; description?: string; error?: string; output?: string; startedAt?: string }[];
 }
 
 interface DeepForgeStore {

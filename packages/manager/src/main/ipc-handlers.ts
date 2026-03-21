@@ -318,6 +318,18 @@ export function registerIPCHandlers(
                 }
               }
             }
+            // Add forced roles based on current phase
+            const forcedRoles = ['critic', 'verifier'];
+            for (const fr of forcedRoles) {
+              const hasIt = tasks.some(t => t.role === fr);
+              if (!hasIt) {
+                const frStatus = phase === 'critiquing' && fr === 'critic' ? 'running'
+                  : phase === 'verifying' && fr === 'verifier' ? 'running'
+                  : (phase === 'iterating' || phase === 'planning') ? 'completed'
+                  : 'pending';
+                tasks.push({ role: fr, status: frStatus, description: fr === 'critic' ? '审查产出、找问题' : '核查真实性' });
+              }
+            }
           } catch { /* ignore parse errors */ }
         }
 

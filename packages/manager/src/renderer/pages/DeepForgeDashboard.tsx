@@ -64,9 +64,12 @@ function getRoleLabel(role: string): string {
   return ROLE_LABELS[lower] || role;
 }
 
-function formatElapsed(startedAt?: number): string {
+function formatElapsed(startedAt?: string | number): string {
   if (!startedAt) return '';
-  const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+  const start = typeof startedAt === 'string' ? new Date(startedAt).getTime() : startedAt;
+  if (isNaN(start)) return '';
+  const elapsed = Math.floor((Date.now() - start) / 1000);
+  if (elapsed < 0) return '';
   if (elapsed < 60) return `${elapsed}秒`;
   if (elapsed < 3600) return `${Math.floor(elapsed / 60)}分${elapsed % 60}秒`;
   const h = Math.floor(elapsed / 3600);

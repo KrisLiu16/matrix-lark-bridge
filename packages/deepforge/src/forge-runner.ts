@@ -4,6 +4,7 @@
  */
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -18,6 +19,7 @@ export interface ForgeRunOpts {
   claudePath?: string;
   env?: Record<string, string>;
   timeoutMs?: number;
+  taskId?: string;       // For per-task log file
 }
 
 export interface ForgeRunResult {
@@ -31,6 +33,18 @@ export interface ForgeRunResult {
 export async function forgeRun(opts: ForgeRunOpts): Promise<ForgeRunResult> {
   const start = Date.now();
   const claudePath = opts.claudePath || process.env.CLAUDE_PATH || DEFAULT_CC_PATH;
+
+  // Per-task live log
+  let taskLogPath: string | null = null;
+  if (opts.taskId) {
+    const logsDir = join(opts.workDir, 'task-logs');
+    mkdirSync(logsDir, { recursive: true });
+    taskLogPath = join(logsDir, `${opts.taskId}.log`);
+    appendFileSync(taskLogPath, `[${new Date().toISOString()}] Task started: ${opts.taskId}\n`);
+  }
+  const taskLog = (msg: string) => {
+    if (taskLogPath) appendFileSync(taskLogPath, msg + '\n');
+  };
 
   const args = [
     '--output-format', 'stream-json',
@@ -94,7 +108,13 @@ export async function forgeRun(opts: ForgeRunOpts): Promise<ForgeRunResult> {
             const msg = data.message;
             if (msg?.content && Array.isArray(msg.content)) {
               for (const block of msg.content) {
-                if (block.type === 'text') output += block.text;
+                if (block.type === 'text') {
+                  output += block.text;
+                  taskLog(`[text] ${block.text.substring(0, 200)}`);
+                }
+                if (block.type === 'tool_use') {
+                  taskLog(`[tool] ${block.name}: ${JSON.stringify(block.input).substring(0, 150)}`);
+                }
               }
             }
             break;

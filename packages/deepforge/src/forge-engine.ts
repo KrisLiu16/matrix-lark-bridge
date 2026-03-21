@@ -166,6 +166,7 @@ export class ForgeEngine {
       systemPrompt: leaderPrompt(this.project),
       userPrompt: buildForgePrompt('leader', task, this.project, this.workDir, iterNum),
       env: this.getEnv(),
+      taskId: task.id,
     });
 
     writeFileSync(join(iterDir, 'plan.md'), result.output);
@@ -227,6 +228,7 @@ export class ForgeEngine {
           systemPrompt: dynamicRolePrompt(roleConfig, this.project),
           userPrompt: buildForgePrompt(task.role, task, this.project, this.workDir, this.state.currentIteration),
           env: this.getEnv(),
+      taskId: task.id,
         });
 
         task.status = result.success ? 'completed' : 'failed';
@@ -268,6 +270,7 @@ export class ForgeEngine {
       systemPrompt: criticPrompt(this.project),
       userPrompt: buildForgePrompt('critic', task, this.project, this.workDir, iterNum),
       env: this.getEnv(),
+      taskId: task.id,
     });
 
     // Write critic feedback, preserving user's BINDING requirements
@@ -319,6 +322,7 @@ export class ForgeEngine {
       systemPrompt: verifierPrompt(this.project),
       userPrompt: buildForgePrompt('verifier', task, this.project, this.workDir, iterNum),
       env: this.getEnv(),
+      taskId: task.id,
     });
 
     this.addCost(result.costUsd);
@@ -355,6 +359,7 @@ export class ForgeEngine {
       systemPrompt: leaderPrompt(this.project),
       userPrompt: buildForgePrompt('leader', task, this.project, this.workDir, iterNum),
       env: this.getEnv(),
+      taskId: task.id,
     });
 
     this.addCost(result.costUsd);

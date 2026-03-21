@@ -49,6 +49,8 @@ const api = {
     status: (projectId: string): Promise<any> => ipcRenderer.invoke('forge:status', projectId),
     logs: (projectId: string, lines?: number): Promise<string[]> =>
       ipcRenderer.invoke('forge:logs', projectId, lines),
+    taskLog: (projectId: string, taskId: string): Promise<string[]> =>
+      ipcRenderer.invoke('forge:task-log', projectId, taskId),
   },
   claude: {
     check: (): Promise<{ installed: boolean; version?: string; path?: string }> =>

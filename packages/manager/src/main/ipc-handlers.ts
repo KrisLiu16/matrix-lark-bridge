@@ -397,6 +397,19 @@ export function registerIPCHandlers(
     return [];
   });
 
+  ipcMain.handle('forge:task-log', async (_event, projectId: string, taskId: string) => {
+    for (const baseDir of FORGE_DIRS) {
+      const logPath = join(baseDir, projectId, 'task-logs', `${taskId}.log`);
+      if (existsSync(logPath)) {
+        try {
+          const content = readFileSync(logPath, 'utf-8');
+          return content.split('\n').slice(-100);
+        } catch { return []; }
+      }
+    }
+    return [];
+  });
+
   // --- System ---
 
   ipcMain.handle('app:get-workspace-root', async () => {

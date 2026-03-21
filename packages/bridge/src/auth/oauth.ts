@@ -35,6 +35,8 @@ const USER_SCOPES = [
   'docx:document:create', 'docx:document:readonly', 'docx:document:write_only',
   // Drive
   'drive:drive.metadata:readonly', 'drive:file:download', 'drive:file:upload',
+  // Mail & Approval — not included in default OAuth scopes.
+  // Users must enable these scopes manually on open.feishu.cn before using mail/approval tools.
   // IM
   'im:chat.members:read', 'im:chat:read', 'im:message',
   'im:message.group_msg:get_as_user', 'im:message.p2p_msg:get_as_user',
@@ -218,25 +220,28 @@ export async function getTenantAccessToken(appId: string, appSecret: string, api
 }
 
 export async function refreshUserToken(appId: string, appSecret: string, refreshToken: string, apiBaseUrl: string): Promise<TokenData> {
-  const appToken = await getAppAccessToken(appId, appSecret, apiBaseUrl);
-
-  const resp = await fetch(`${apiBaseUrl}/open-apis/authen/v1/oidc/refresh_access_token`, {
+  // Use v2 OAuth endpoint (matches v2 Device Flow used for authorization)
+  const resp = await fetch(`${apiBaseUrl}/open-apis/authen/v2/oauth/token`, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${appToken}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
     },
-    body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: refreshToken }),
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: appId,
+      client_secret: appSecret,
+    }).toString(),
   });
   const data = await resp.json() as any;
   if (data.code !== 0) {
-    throw new Error(`token refresh failed: code=${data.code} msg=${data.msg}`);
+    throw new Error(`token refresh failed: code=${data.code} msg=${data.message ?? data.msg}`);
   }
 
   return {
-    user_access_token: data.data.access_token,
-    refresh_token: data.data.refresh_token,
-    token_expiry: new Date(Date.now() + data.data.expires_in * 1000).toISOString(),
-    scope: data.data.scope ?? '',
+    user_access_token: data.access_token,
+    refresh_token: data.refresh_token,
+    token_expiry: new Date(Date.now() + data.expires_in * 1000).toISOString(),
+    scope: data.scope ?? '',
   };
 }

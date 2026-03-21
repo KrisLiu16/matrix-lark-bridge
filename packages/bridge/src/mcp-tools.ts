@@ -283,6 +283,21 @@ export const OAPI_TOOLS: McpToolDefinition[] = [
     },
   },
   {
+    name: 'lark_im_file',
+    description: '【以 Bot 身份】飞书 IM 文件上传/下载工具。Actions: upload（上传本地文件到飞书获取 file_key，用于发送文件消息）, download（通过 file_key 下载 Bot 上传的文件到本地）。支持所有文件格式：opus/mp4/pdf/doc/xls/ppt 以及其他任意格式（自动归为 stream 类型）。上传限制 30MB，下载限制 100MB。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['upload', 'download'], description: 'Action' },
+        file_path: { type: 'string', description: '本地文件路径（upload 必填）' },
+        file_key: { type: 'string', description: '文件 Key（download 必填，file_xxx 格式）' },
+        output_path: { type: 'string', description: '下载保存路径（download，不提供则自动保存到工作目录）' },
+        duration: { type: 'number', description: '音视频时长（毫秒，upload 可选，仅 opus/mp4）' },
+      },
+      required: ['action'],
+    },
+  },
+  {
     name: 'lark_im_get_messages',
     description: '【以用户身份】获取群聊或单聊的历史消息。通过 chat_id 获取群聊/单聊消息，或通过 open_id 获取与指定用户的单聊消息。支持时间范围过滤和分页。',
     inputSchema: {
@@ -518,6 +533,67 @@ export const OAPI_TOOLS: McpToolDefinition[] = [
       required: ['action'],
     },
   },
+  // ── Mail ──
+  {
+    name: 'lark_mail',
+    description: '【以用户身份】飞书邮件工具。Actions: list（获取邮件列表）, get（获取邮件详情，含正文和附件信息）, send（发送邮件，支持 HTML 正文和附件）。发送邮件前必须向用户确认收件人和邮件内容。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['list', 'get', 'send'], description: 'Action' },
+        mailbox_id: { type: 'string', description: '邮箱 ID（通常为 me，表示当前用户邮箱）' },
+        message_id: { type: 'string', description: '邮件 ID（get 必填）' },
+        subject: { type: 'string', description: '邮件主题（send 必填）' },
+        to: { type: 'array', items: { type: 'object', properties: { mail_address: { type: 'string' }, name: { type: 'string' } }, required: ['mail_address'] }, description: '收件人列表（send 必填）' },
+        cc: { type: 'array', items: { type: 'object', properties: { mail_address: { type: 'string' }, name: { type: 'string' } }, required: ['mail_address'] }, description: '抄送人列表（send，可选）' },
+        body_html: { type: 'string', description: '邮件正文 HTML（send 必填）' },
+        body_plain_text: { type: 'string', description: '邮件纯文本正文（send，可选降级）' },
+        _user_confirmed: { type: 'boolean', description: '用户已通过 AskUserQuestion 确认操作（send 必须先确认）' },
+        page_size: { type: 'number', description: '每页数量（list）' },
+        page_token: { type: 'string', description: '分页标记（list）' },
+      },
+      required: ['action'],
+    },
+  },
+  // ── Approval ──
+  {
+    name: 'lark_approval',
+    description: '【以 Bot/租户身份】飞书审批管理工具。Actions: get_definition（获取审批定义/表单结构）, list_instances（查询审批实例列表）, get_instance（获取审批实例详情，含审批历史和表单值）, create（发起审批实例）。所有操作均使用租户身份。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['get_definition', 'list_instances', 'get_instance', 'create'], description: 'Action' },
+        approval_code: { type: 'string', description: '审批定义 code（get_definition/list_instances/create 必填）' },
+        instance_id: { type: 'string', description: '审批实例 ID（get_instance 必填）' },
+        start_time: { type: 'string', description: '起始时间（list_instances，Unix 毫秒时间戳）' },
+        end_time: { type: 'string', description: '结束时间（list_instances，Unix 毫秒时间戳）' },
+        open_id: { type: 'string', description: '发起人 open_id（create 必填）' },
+        form: { type: 'string', description: '表单内容 JSON 字符串（create 必填），格式参见审批定义的 form 字段' },
+        node_approver_open_id_list: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, value: { type: 'array', items: { type: 'string' } } }, required: ['key', 'value'] }, description: '审批节点审批人（create，可选）' },
+        _user_confirmed: { type: 'boolean', description: '用户已通过 AskUserQuestion 确认操作（create 必须先确认）' },
+        page_size: { type: 'number', description: '每页数量' },
+        page_token: { type: 'string', description: '分页标记' },
+      },
+      required: ['action'],
+    },
+  },
+  // ── Contact Department ──
+  {
+    name: 'lark_contact_department',
+    description: '飞书组织架构部门管理工具。Actions: list（获取子部门列表）, get_users（获取部门直属成员列表）。默认使用租户身份（全局视角），可降级为用户身份。根部门 ID 为 "0"。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['list', 'get_users'], description: 'Action' },
+        department_id: { type: 'string', description: '部门 ID（默认 "0" 表示根部门）' },
+        department_id_type: { type: 'string', enum: ['department_id', 'open_department_id'], description: '部门 ID 类型（默认 open_department_id）' },
+        fetch_child: { type: 'boolean', description: '是否递归获取子部门（list，默认 false）' },
+        page_size: { type: 'number', description: '每页数量' },
+        page_token: { type: 'string', description: '分页标记' },
+      },
+      required: ['action'],
+    },
+  },
   // ── Speech Recognition (ASR) ──
   {
     name: 'lark_speech_recognize',
@@ -616,6 +692,7 @@ export const TOOL_TOKEN_MODES: Record<string, TokenMode | Record<string, TokenMo
   lark_im_get_messages: 'user',       // Reading message history requires user permission
   lark_im_search_messages: 'user',    // Searching messages requires user permission
   lark_im_upload_image: 'tenant',      // Bot uploads images for sending
+  lark_im_file: 'tenant',              // Bot uploads/downloads files
   lark_im_fetch_resource: 'auto',     // Bot-received resources use TAT, user message resources use UAT
 
   // -- Calendar: all UAT --
@@ -651,6 +728,20 @@ export const TOOL_TOKEN_MODES: Record<string, TokenMode | Record<string, TokenMo
   // -- Chat: read with user --
   lark_chat: 'user',
   lark_chat_members: 'user',
+
+  // -- Mail --
+  lark_mail: {
+    list: 'user',
+    get: 'user',
+    send: 'user',
+    _default: 'user',
+  },
+
+  // -- Approval --
+  lark_approval: 'tenant',  // Approval APIs use tenant token (admin-level access)
+
+  // -- Contact Department --
+  lark_contact_department: 'auto',  // Tenant preferred (global view), user fallback
 
   // -- Speech Recognition --
   lark_speech_recognize: 'tenant',  // ASR API uses tenant token

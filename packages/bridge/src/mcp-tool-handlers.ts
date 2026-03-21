@@ -9,12 +9,8 @@
 import * as lark from '@larksuiteoapi/node-sdk';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { writeFileSync, mkdirSync, readFileSync, statSync, unlinkSync, realpathSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync, statSync, realpathSync } from 'node:fs';
 import { join, basename, dirname, extname, resolve } from 'node:path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-
-const execFileAsync = promisify(execFile);
 
 type RequestOptions = ReturnType<typeof lark.withUserAccessToken> | undefined;
 
@@ -149,6 +145,7 @@ export async function executeOapiTool(
     case 'lark_search_user': return executeSearchUser(sdk, args, opts);
     case 'lark_im_message': return executeImMessage(sdk, args, opts);
     case 'lark_im_upload_image': return executeImUploadImage(sdk, args, opts);
+    case 'lark_im_file': return executeImFile(sdk, args, opts);
     case 'lark_im_get_messages': return executeImGetMessages(sdk, args, opts);
     case 'lark_im_search_messages': return executeImSearchMessages(sdk, args, opts);
     case 'lark_im_fetch_resource': return executeImFetchResource(sdk, args, opts);
@@ -163,6 +160,9 @@ export async function executeOapiTool(
     case 'lark_bitable_view': return executeBitableView(sdk, args, opts);
     case 'lark_wiki_space': return executeWikiSpace(sdk, args, opts);
     case 'lark_sheet_export': return executeSheetExport(sdk, args, opts);
+    case 'lark_mail': return executeMail(sdk, args, opts);
+    case 'lark_approval': return executeApproval(sdk, args, opts);
+    case 'lark_contact_department': return executeContactDepartment(sdk, args, opts);
     case 'lark_speech_recognize': return executeSpeechRecognize(sdk, args, opts);
     default: throw new Error(`Unknown OAPI tool: ${toolName}`);
   }
@@ -964,6 +964,84 @@ async function executeImUploadImage(sdk: lark.Client, args: Record<string, unkno
   return { image_key: imageKey };
 }
 
+// ─── IM File (upload/download) ──────────────────────────────────────────────
+
+const EXT_TO_IM_FILE_TYPE: Record<string, string> = {
+  '.opus': 'opus', '.mp4': 'mp4', '.pdf': 'pdf',
+  '.doc': 'doc', '.docx': 'doc', '.xls': 'xls', '.xlsx': 'xls',
+  '.ppt': 'ppt', '.pptx': 'ppt',
+};
+const MAX_IM_FILE_UPLOAD = 30 * 1024 * 1024;  // 30MB
+const MAX_IM_FILE_DOWNLOAD = 100 * 1024 * 1024; // 100MB
+
+async function executeImFile(sdk: lark.Client, args: Record<string, unknown>, opts: RequestOptions): Promise<unknown> {
+  switch (args.action) {
+    case 'upload': {
+      if (!args.file_path) throw new Error('file_path is required for upload');
+      const safePath = assertAllowedFilePath(args.file_path as string);
+      const stat = statSync(safePath);
+      if (stat.size === 0) throw new Error('Cannot upload empty file');
+      if (stat.size > MAX_IM_FILE_UPLOAD) throw new Error(`File ${(stat.size / 1024 / 1024).toFixed(1)}MB exceeds 30MB limit`);
+
+      const fileName = basename(safePath);
+      const ext = extname(safePath).toLowerCase();
+      const fileType = EXT_TO_IM_FILE_TYPE[ext] || 'stream';
+
+      const fileBuffer = readFileSync(safePath);
+      const data: any = {
+        file_type: fileType,
+        file_name: fileName,
+        file: fileBuffer,
+      };
+      if (args.duration && (fileType === 'opus' || fileType === 'mp4')) {
+        data.duration = String(args.duration);
+      }
+
+      const res = await sdk.im.v1.file.create({ data }, opts);
+      const r = res as any;
+      const fileKey = r?.file_key ?? r?.data?.file_key;
+      if (!fileKey) {
+        const code = r?.code ?? r?.data?.code ?? 'unknown';
+        const msg = r?.msg ?? r?.data?.msg ?? JSON.stringify(r?.data ?? r);
+        throw new Error(`Failed to upload file: code=${code}, msg=${msg}`);
+      }
+      return { file_key: fileKey, file_name: fileName, file_type: fileType, size_bytes: stat.size };
+    }
+
+    case 'download': {
+      if (!args.file_key) throw new Error('file_key is required for download');
+      const fileKey = validatePathParam(args.file_key, 'file_key');
+
+      const res = await sdk.im.v1.file.get({ path: { file_key: fileKey } }, opts);
+      const stream = (res as any).getReadableStream();
+      const chunks: Buffer[] = [];
+      let totalSize = 0;
+      for await (const chunk of stream) {
+        totalSize += (chunk as Buffer).length;
+        if (totalSize > MAX_IM_FILE_DOWNLOAD) throw new Error('Downloaded file exceeds 100MB limit');
+        chunks.push(chunk as Buffer);
+      }
+      const buffer = Buffer.concat(chunks);
+
+      // Determine save path
+      let savePath: string;
+      if (args.output_path) {
+        savePath = assertAllowedFilePath(args.output_path as string);
+      } else {
+        const downloadsDir = join(process.env.MLB_WORKSPACE || tmpdir(), 'downloads');
+        mkdirSync(downloadsDir, { recursive: true });
+        savePath = join(downloadsDir, `${fileKey.replace(/[^a-zA-Z0-9_-]/g, '_')}.bin`);
+      }
+
+      writeFileSync(savePath, buffer);
+      return { file_key: fileKey, size_bytes: buffer.length, saved_path: savePath };
+    }
+
+    default:
+      throw new Error(`Unknown im_file action: ${args.action}`);
+  }
+}
+
 // ─── IM Message (send/reply) ────────────────────────────────────────────────
 
 async function executeImMessage(sdk: lark.Client, args: Record<string, unknown>, opts: RequestOptions): Promise<unknown> {
@@ -1251,7 +1329,7 @@ async function executeDriveFile(sdk: lark.Client, args: Record<string, unknown>,
 
     case 'upload': {
       if (!args.file_path) throw new Error('file_path is required for upload');
-      const filePath = args.file_path as string;
+      const filePath = assertAllowedFilePath(args.file_path as string);
       const fileBuffer = readFileSync(filePath);
       const fileName = (args.file_name as string) || basename(filePath);
       const fileSize = fileBuffer.length;
@@ -1299,7 +1377,7 @@ async function executeDriveFile(sdk: lark.Client, args: Record<string, unknown>,
       const buffer = Buffer.concat(chunks);
 
       if (args.output_path) {
-        const outPath = args.output_path as string;
+        const outPath = assertAllowedFilePath(args.output_path as string);
         mkdirSync(dirname(outPath), { recursive: true });
         writeFileSync(outPath, buffer);
         return { saved_path: outPath, size: buffer.length };
@@ -1327,7 +1405,7 @@ async function executeDocMedia(sdk: lark.Client, args: Record<string, unknown>, 
       if (!args.doc_id) throw new Error('doc_id is required');
       if (!args.file_path) throw new Error('file_path is required');
       const documentId = extractDocumentId(args.doc_id as string);
-      const filePath = args.file_path as string;
+      const filePath = assertAllowedFilePath(args.file_path as string);
       const mediaType = (args.type as string) || 'image';
       const stat = statSync(filePath);
       if (stat.size > 20 * 1024 * 1024) throw new Error(`File ${(stat.size / 1024 / 1024).toFixed(1)}MB exceeds 20MB limit`);
@@ -1405,7 +1483,7 @@ async function executeDocMedia(sdk: lark.Client, args: Record<string, unknown>, 
       const buffer = Buffer.concat(chunks);
 
       const contentType = res?.headers?.['content-type'] || '';
-      let finalPath = args.output_path as string;
+      let finalPath = assertAllowedFilePath(args.output_path as string);
       const currentExt = extname(finalPath);
       if (!currentExt && contentType) {
         const mimeType = contentType.split(';')[0].trim();
@@ -1728,6 +1806,185 @@ async function executeSheetExport(sdk: lark.Client, args: Record<string, unknown
   }
 }
 
+// ─── Mail ────────────────────────────────────────────────────────────────────
+
+async function executeMail(sdk: lark.Client, args: Record<string, unknown>, opts: RequestOptions): Promise<unknown> {
+  const mailboxId = (args.mailbox_id as string) || 'me';
+
+  switch (args.action) {
+    case 'list': {
+      const res = await sdk.request({
+        method: 'GET',
+        url: `/open-apis/mail/v1/mailboxes/${validatePathParam(mailboxId, 'mailbox_id')}/messages`,
+        params: {
+          page_size: args.page_size as any,
+          page_token: args.page_token as any,
+          user_id_type: 'open_id',
+        },
+      }, opts);
+      return { items: (res as any)?.data?.items, has_more: (res as any)?.data?.has_more, page_token: (res as any)?.data?.page_token };
+    }
+
+    case 'get': {
+      if (!args.message_id) throw new Error('message_id is required');
+      const msgId = validatePathParam(args.message_id, 'message_id');
+      const res = await sdk.request({
+        method: 'GET',
+        url: `/open-apis/mail/v1/mailboxes/${validatePathParam(mailboxId, 'mailbox_id')}/messages/${msgId}`,
+        params: { user_id_type: 'open_id' },
+      }, opts);
+      return { message: (res as any)?.data };
+    }
+
+    case 'send': {
+      if (!args._user_confirmed) {
+        const toList = Array.isArray(args.to) ? (args.to as any[]).map(r => r.mail_address || r.email).join(', ') : String(args.to);
+        return {
+          pending_confirmation: true,
+          action: 'send',
+          message: `发送邮件需要用户确认。请使用 AskUserQuestion 向用户确认以下信息，获得确认后再次调用 lark_mail（action=send）并添加参数 _user_confirmed=true。\n\n收件人: ${toList}\n主题: ${args.subject}\n正文摘要: ${String(args.body_html || args.body_plain_text || '').slice(0, 200)}`,
+        };
+      }
+      if (!args.subject) throw new Error('subject is required');
+      if (!args.to) throw new Error('to is required');
+      const data: any = {
+        subject: args.subject,
+        to: args.to,
+      };
+      if (args.cc) data.cc = args.cc;
+      if (args.body_html) data.body = { content: args.body_html, content_type: 'text/html' };
+      else if (args.body_plain_text) data.body = { content: args.body_plain_text, content_type: 'text/plain' };
+      else throw new Error('body_html or body_plain_text is required');
+
+      const res = await sdk.request({
+        method: 'POST',
+        url: `/open-apis/mail/v1/mailboxes/${validatePathParam(mailboxId, 'mailbox_id')}/messages/send`,
+        data,
+      }, opts);
+      return { message_id: (res as any)?.data?.message_id, success: true };
+    }
+
+    default:
+      throw new Error(`Unknown mail action: ${args.action}`);
+  }
+}
+
+// ─── Approval ────────────────────────────────────────────────────────────────
+
+async function executeApproval(sdk: lark.Client, args: Record<string, unknown>, opts: RequestOptions): Promise<unknown> {
+  switch (args.action) {
+    case 'get_definition': {
+      if (!args.approval_code) throw new Error('approval_code is required');
+      const res = await sdk.request({
+        method: 'POST',
+        url: '/open-apis/approval/v4/approvals/query',
+        data: { approval_code: args.approval_code, locale: 'zh-CN' },
+      }, opts);
+      return { approval: (res as any)?.data };
+    }
+
+    case 'list_instances': {
+      if (!args.approval_code) throw new Error('approval_code is required');
+      const data: any = { approval_code: args.approval_code };
+      if (args.start_time) data.start_time = args.start_time;
+      if (args.end_time) data.end_time = args.end_time;
+      if (args.page_size) data.page_size = args.page_size;
+      if (args.page_token) data.page_token = args.page_token;
+      const res = await sdk.request({
+        method: 'GET',
+        url: '/open-apis/approval/v4/instances',
+        params: data,
+      }, opts);
+      return { items: (res as any)?.data?.instance_code_list, has_more: (res as any)?.data?.has_more, page_token: (res as any)?.data?.page_token };
+    }
+
+    case 'get_instance': {
+      if (!args.instance_id) throw new Error('instance_id is required');
+      const instanceId = validatePathParam(args.instance_id, 'instance_id');
+      const res = await sdk.request({
+        method: 'GET',
+        url: `/open-apis/approval/v4/instances/${instanceId}`,
+        params: { user_id_type: 'open_id' },
+      }, opts);
+      return { instance: (res as any)?.data };
+    }
+
+    case 'create': {
+      if (!args._user_confirmed) {
+        return {
+          pending_confirmation: true,
+          action: 'create',
+          message: `发起审批需要用户确认。请使用 AskUserQuestion 向用户确认以下信息，获得确认后再次调用 lark_approval（action=create）并添加参数 _user_confirmed=true。\n\n审批定义: ${args.approval_code}\n发起人 open_id: ${args.open_id}\n表单内容: ${String(args.form).slice(0, 300)}`,
+        };
+      }
+      if (!args.approval_code) throw new Error('approval_code is required');
+      if (!args.open_id) throw new Error('open_id is required (initiator)');
+      if (!args.form) throw new Error('form is required (JSON string of form values)');
+      const data: any = {
+        approval_code: args.approval_code,
+        open_id: args.open_id,
+        form: args.form,
+      };
+      if (args.node_approver_open_id_list) data.node_approver_open_id_list = args.node_approver_open_id_list;
+      const res = await sdk.request({
+        method: 'POST',
+        url: '/open-apis/approval/v4/instances',
+        data,
+        params: { user_id_type: 'open_id' },
+      }, opts);
+      return { instance_code: (res as any)?.data?.instance_code };
+    }
+
+    default:
+      throw new Error(`Unknown approval action: ${args.action}`);
+  }
+}
+
+// ─── Contact Department ──────────────────────────────────────────────────────
+
+async function executeContactDepartment(sdk: lark.Client, args: Record<string, unknown>, opts: RequestOptions): Promise<unknown> {
+  const deptId = (args.department_id as string) || '0';
+  const deptIdType = (args.department_id_type as string) || 'open_department_id';
+
+  switch (args.action) {
+    case 'list': {
+      const params: any = {
+        department_id_type: deptIdType,
+        parent_department_id: deptId,
+        fetch_child: args.fetch_child ?? false,
+        page_size: args.page_size,
+        page_token: args.page_token,
+        user_id_type: 'open_id',
+      };
+      const res = await sdk.request({
+        method: 'GET',
+        url: '/open-apis/contact/v3/departments',
+        params,
+      }, opts);
+      return { items: (res as any)?.data?.items, has_more: (res as any)?.data?.has_more, page_token: (res as any)?.data?.page_token };
+    }
+
+    case 'get_users': {
+      const safeDeptId = validatePathParam(deptId, 'department_id');
+      const res = await sdk.request({
+        method: 'GET',
+        url: `/open-apis/contact/v3/users/find_by_department`,
+        params: {
+          department_id: safeDeptId,
+          department_id_type: deptIdType,
+          page_size: args.page_size,
+          page_token: args.page_token,
+          user_id_type: 'open_id',
+        },
+      }, opts);
+      return { items: (res as any)?.data?.items, has_more: (res as any)?.data?.has_more, page_token: (res as any)?.data?.page_token };
+    }
+
+    default:
+      throw new Error(`Unknown contact_department action: ${args.action}`);
+  }
+}
+
 // ─── Speech Recognition (ASR) ───────────────────────────────────────────────
 
 async function executeSpeechRecognize(sdk: lark.Client, args: Record<string, unknown>, opts: RequestOptions): Promise<unknown> {
@@ -1758,37 +2015,25 @@ async function executeSpeechRecognize(sdk: lark.Client, args: Record<string, unk
     throw new Error(`Audio file too large: ${(audioBuffer.length / 1024 / 1024).toFixed(1)}MB exceeds ${MAX_AUDIO_SIZE / 1024 / 1024}MB limit`);
   }
 
-  // Convert to PCM (16kHz mono)
-  const tmpIn = join(tmpdir(), `mlb-asr-${randomBytes(4).toString('hex')}.ogg`);
-  const tmpOut = join(tmpdir(), `mlb-asr-${randomBytes(4).toString('hex')}.pcm`);
+  // Convert to PCM (16kHz mono) using shared audio util (WASM instance reused)
+  const { convertAudioToPcm } = await import('./audio-utils.js');
+  const pcmBuffer = await convertAudioToPcm(audioBuffer);
 
-  try {
-    writeFileSync(tmpIn, audioBuffer);
-    await execFileAsync('ffmpeg', [
-      '-i', tmpIn, '-f', 's16le', '-acodec', 'pcm_s16le',
-      '-ar', '16000', '-ac', '1', '-y', tmpOut,
-    ], { timeout: 30_000 });
+  const fileId = randomBytes(8).toString('hex');
 
-    const pcmBuffer = readFileSync(tmpOut);
-    const fileId = randomBytes(8).toString('hex');
+  // Call ASR API via sdk.request (uses tenant token)
+  const result = await sdk.request({
+    method: 'POST',
+    url: '/open-apis/speech_to_text/v1/speech/file_recognize',
+    data: {
+      speech: { speech: pcmBuffer.toString('base64') },
+      config: { file_id: fileId, format: 'pcm', engine_type: '16k_auto' },
+    },
+  }, opts);
 
-    // Call ASR API via sdk.request (uses tenant token)
-    const result = await sdk.request({
-      method: 'POST',
-      url: '/open-apis/speech_to_text/v1/speech/file_recognize',
-      data: {
-        speech: { speech: pcmBuffer.toString('base64') },
-        config: { file_id: fileId, format: 'pcm', engine_type: '16k_auto' },
-      },
-    }, opts);
-
-    return {
-      recognition_text: (result as any)?.data?.recognition_text || '',
-      audio_size: audioBuffer.length,
-      pcm_size: pcmBuffer.length,
-    };
-  } finally {
-    try { unlinkSync(tmpIn); } catch { /* ignore */ }
-    try { unlinkSync(tmpOut); } catch { /* ignore */ }
-  }
+  return {
+    recognition_text: (result as any)?.data?.recognition_text || '',
+    audio_size: audioBuffer.length,
+    pcm_size: pcmBuffer.length,
+  };
 }

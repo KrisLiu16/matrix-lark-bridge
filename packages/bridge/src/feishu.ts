@@ -1,14 +1,9 @@
 import * as lark from '@larksuiteoapi/node-sdk';
 import type { Readable } from 'node:stream';
 import { randomBytes } from 'node:crypto';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { writeFileSync, readFileSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join, extname } from 'node:path';
 import type { ImageAttachment, SenderInfo } from './types.js';
-
-const execFileAsync = promisify(execFile);
 
 export class FeishuClient {
   private client: lark.Client;
@@ -18,12 +13,14 @@ export class FeishuClient {
   private apiBaseUrl: string;
   private cachedTenantToken = '';
   private tenantTokenExpiry = 0;
+  private workDir?: string;
 
-  constructor(appId: string, appSecret: string, apiBaseUrl = 'https://open.feishu.cn') {
+  constructor(appId: string, appSecret: string, apiBaseUrl = 'https://open.feishu.cn', workDir?: string) {
     this.appId = appId;
     this.appSecret = appSecret;
     this.apiBaseUrl = apiBaseUrl.replace(/\/+$/, '');
     this.client = new lark.Client({ appId, appSecret, domain: apiBaseUrl });
+    this.workDir = workDir;
   }
 
   // --- WebSocket connection ---
@@ -74,8 +71,8 @@ export class FeishuClient {
 
     console.log(`[feishu] received message_type=${messageType}`);
 
-    // Only handle text, image, post (rich text), and audio messages
-    if (messageType !== 'text' && messageType !== 'image' && messageType !== 'post' && messageType !== 'audio') {
+    // Only handle text, image, post (rich text), audio, and file messages
+    if (messageType !== 'text' && messageType !== 'image' && messageType !== 'post' && messageType !== 'audio' && messageType !== 'file') {
       console.log(`[feishu] ignoring message type: ${messageType}`);
       return;
     }
@@ -190,6 +187,43 @@ export class FeishuClient {
           handler(content.trim(), images, chatId, message.message_id, senderInfo, listeningMsgId || undefined);
           return; // Early return — already called handler with cardMsgId
         }
+      } else if (messageType === 'file') {
+        const fileKey = parsed.file_key as string;
+        const fileName = (parsed.file_name as string) || 'unknown_file';
+
+        if (!fileKey) {
+          console.warn('[feishu] file message missing file_key');
+        } else {
+          try {
+            const buf = await this.downloadFile(message.message_id, fileKey);
+            console.log(`[feishu] downloaded file: ${fileName} (${buf.length} bytes)`);
+
+            if (buf.length > 100 * 1024 * 1024) {
+              content = `[文件] ${fileName}（${(buf.length / 1024 / 1024).toFixed(1)}MB）文件过大，无法自动下载。`;
+            } else {
+              // Save to workDir/feishu_files/
+              const fileDir = join(this.workDir || process.cwd(), 'feishu_files');
+              mkdirSync(fileDir, { recursive: true });
+
+              // Sanitize filename: remove path separators and null bytes
+              const safeName = fileName.replace(/[/\\:\0]/g, '_');
+              // Handle duplicate names by appending timestamp
+              const ext = extname(safeName);
+              const base = safeName.slice(0, safeName.length - ext.length);
+              const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+              const saveName = `${base}_${timestamp}${ext}`;
+              const savePath = join(fileDir, saveName);
+
+              writeFileSync(savePath, buf);
+              const sizeMB = (buf.length / 1024 / 1024).toFixed(2);
+              content = `[文件] 从飞书收到文件，已下载到本地：\n路径：${savePath}\n文件名：${fileName}\n大小：${sizeMB} MB`;
+              console.log(`[feishu] saved file to: ${savePath}`);
+            }
+          } catch (err) {
+            content = `[文件] ${fileName} 下载失败：${(err as Error).message}`;
+            console.error('[feishu] file download error:', err);
+          }
+        }
       }
     } catch (err) {
       content = message.content || '';
@@ -260,27 +294,8 @@ export class FeishuClient {
   // --- Audio processing (ASR) ---
 
   private async convertAudioToPcm(audioBuffer: Buffer): Promise<Buffer> {
-    const tmpIn = join(tmpdir(), `mlb-audio-${randomBytes(4).toString('hex')}.ogg`);
-    const tmpOut = join(tmpdir(), `mlb-audio-${randomBytes(4).toString('hex')}.pcm`);
-
-    try {
-      writeFileSync(tmpIn, audioBuffer);
-
-      await execFileAsync('ffmpeg', [
-        '-i', tmpIn,
-        '-f', 's16le',        // PCM signed 16-bit little-endian
-        '-acodec', 'pcm_s16le',
-        '-ar', '16000',        // 16kHz (matches engine_type: 16k_auto)
-        '-ac', '1',            // mono
-        '-y',                  // overwrite
-        tmpOut,
-      ], { timeout: 30_000 });
-
-      return readFileSync(tmpOut);
-    } finally {
-      try { unlinkSync(tmpIn); } catch { /* ignore */ }
-      try { unlinkSync(tmpOut); } catch { /* ignore */ }
-    }
+    const { convertAudioToPcm } = await import('./audio-utils.js');
+    return convertAudioToPcm(audioBuffer);
   }
 
   private async recognizeSpeech(pcmBuffer: Buffer): Promise<string> {

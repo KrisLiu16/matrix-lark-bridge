@@ -5,6 +5,7 @@ import { useI18n } from './i18n';
 import Sidebar from './components/Sidebar';
 import ToastContainer from './components/Toast';
 import ClaudeSetup from './components/ClaudeSetup';
+import UpdateModal from './components/UpdateModal';
 import BridgeConfig from './pages/BridgeConfig';
 import NewBridge from './pages/NewBridge';
 import LogViewer from './pages/LogViewer';
@@ -128,6 +129,7 @@ export default function App() {
         </div>
       </main>
 
+      <UpdateModal />
       <ToastContainer />
     </div>
   );

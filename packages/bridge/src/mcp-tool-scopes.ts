@@ -122,6 +122,15 @@ export const TOOL_SCOPES: Record<string, string[]> = {
   'lark_get_user.default': ['contact:contact.base:readonly', 'contact:user.base:readonly'],
   'lark_search_user.default': ['contact:user:search'],
 
+  // -- Mail --
+  'lark_mail.list': ['mail:user_mailbox:read'],
+  'lark_mail.get': ['mail:user_mailbox:read'],
+  'lark_mail.send': ['mail:user_mailbox:send_as_user'],
+
+  // -- Contact Department --
+  'lark_contact_department.list': ['contact:department.base:readonly'],
+  'lark_contact_department.get_users': ['contact:department.base:readonly', 'contact:user.base:readonly'],
+
   // -- MCP Doc --
   'lark_fetch_doc.default': ['docx:document:readonly', 'wiki:node:read'],
   'lark_create_doc.default': ['docx:document:create', 'docx:document:readonly', 'docx:document:write_only', 'wiki:node:create', 'wiki:node:read'],

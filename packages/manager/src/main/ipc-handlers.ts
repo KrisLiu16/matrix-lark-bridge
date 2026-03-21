@@ -9,6 +9,7 @@ import type { ConfigStore } from './config-store.js';
 import type { AutoStartManager } from './auto-start.js';
 import type { FeishuSetup } from './feishu-setup.js';
 import type { ClaudeSetup } from './claude-setup.js';
+import { checkForUpdate, openDownloadUrl } from './update-checker.js';
 
 const BRIDGE_NAME_RE = /^[a-zA-Z0-9_-]+$/;
 
@@ -271,5 +272,26 @@ export function registerIPCHandlers(
 
   ipcMain.handle('claude:uninstall', async () => {
     return claudeSetup.uninstall();
+  });
+
+  // --- Update check ---
+
+  ipcMain.handle('app:check-update', async () => {
+    try {
+      const names = configStore.listNames();
+      if (names.length === 0) return { hasUpdate: false };
+
+      const config = configStore.readConfig(names[0]);
+      if (!config.app_id || !config.app_secret) return { hasUpdate: false };
+
+      return await checkForUpdate(config.app_id, config.app_secret);
+    } catch (err) {
+      console.error('[update] check failed:', (err as Error).message);
+      return { hasUpdate: false };
+    }
+  });
+
+  ipcMain.handle('app:open-url', async (_event, url: string) => {
+    openDownloadUrl(url);
   });
 }

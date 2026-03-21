@@ -52,6 +52,11 @@ const api = {
     getWorkspaceRoot: (): Promise<string> => ipcRenderer.invoke('app:get-workspace-root'),
     getLocale: (): Promise<string> => ipcRenderer.invoke('app:get-locale'),
     getRunningCount: (): Promise<number> => ipcRenderer.invoke('app:get-running-count'),
+    checkUpdate: (): Promise<{
+      hasUpdate: boolean; forceUpdate?: boolean; version?: string;
+      notes?: string; downloadUrl?: string; publishDate?: string;
+    }> => ipcRenderer.invoke('app:check-update'),
+    openUrl: (url: string): Promise<void> => ipcRenderer.invoke('app:open-url', url),
   },
   onClaudeSetupProgress: (callback: (progress: {
     step: number; totalSteps: number; status: string; label: string; detail?: string; error?: string;

@@ -38,6 +38,11 @@ interface MlbAPI {
     getWorkspaceRoot(): Promise<string>;
     getLocale(): Promise<string>;
     getRunningCount(): Promise<number>;
+    checkUpdate(): Promise<{
+      hasUpdate: boolean; forceUpdate?: boolean; version?: string;
+      notes?: string; downloadUrl?: string; publishDate?: string;
+    }>;
+    openUrl(url: string): Promise<void>;
   };
   onLogLine(callback: (data: { name: string; line: string }) => void): () => void;
 }

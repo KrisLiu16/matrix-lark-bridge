@@ -187,6 +187,16 @@ export const API_AUTH_POLICIES: ApiAuthPolicy[] = [
     description: 'Wiki APIs — user preferred',
   },
 
+  // ── Contact departments: Tenant preferred ──
+  // 部门查询 — tenant 有全局视角，user 只能看自己所在部门
+  {
+    pattern: /\/contact\/v3\/departments/,
+    preferred: 'tenant',
+    fallback: true,
+    scopes: ['contact:department.base:readonly'],
+    description: 'Contact departments — tenant preferred, user fallback',
+  },
+
   // ── Contact: User identity ──
   {
     pattern: /\/contact\/v3\//,
@@ -194,6 +204,55 @@ export const API_AUTH_POLICIES: ApiAuthPolicy[] = [
     fallback: true,
     scopes: ['contact:contact.base:readonly', 'contact:user.base:readonly'],
     description: 'Contact APIs — user preferred',
+  },
+
+  // ── Mail: User identity ──
+  // 发送邮件 — 只能以用户身份发送
+  {
+    pattern: /\/mail\/v1\/mailboxes\/[^/]+\/messages\/send/,
+    methods: ['POST'],
+    preferred: 'user',
+    fallback: false,
+    scopes: ['mail:user_mailbox:send_as_user'],
+    description: 'Mail send — user only',
+  },
+  // 读取/管理邮件 — 用户优先，租户可读取（需额外权限）
+  {
+    pattern: /\/mail\/v1\//,
+    preferred: 'user',
+    fallback: true,
+    scopes: ['mail:user_mailbox:read'],
+    description: 'Mail APIs — user preferred, tenant fallback',
+  },
+
+  // ── Approval: Tenant only ──
+  // 审批 API 全部使用 tenant token（管理视角）
+  {
+    pattern: /\/approval\/v4\//,
+    preferred: 'tenant',
+    fallback: false,
+    scopes: [],
+    description: 'Approval APIs — tenant only',
+  },
+
+  // ── Attendance: Tenant only ──
+  // 考勤 API 只支持 tenant token
+  {
+    pattern: /\/attendance\/v1\//,
+    preferred: 'tenant',
+    fallback: false,
+    scopes: [],
+    description: 'Attendance APIs — tenant only',
+  },
+
+  // ── VC: User preferred ──
+  // 视频会议 — 用户身份优先（查看自己的会议），tenant 可降级
+  {
+    pattern: /\/vc\/v1\//,
+    preferred: 'user',
+    fallback: true,
+    scopes: [],
+    description: 'VC APIs — user preferred, tenant fallback',
   },
 
   // ── Auth: Tenant only ──

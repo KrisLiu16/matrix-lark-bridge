@@ -166,7 +166,7 @@ export class Gateway {
   constructor(config: BridgeConfig, workspace: string) {
     this.config = config;
     this.workspace = workspace;
-    this.feishu = new FeishuClient(config.app_id, config.app_secret, config.api_base_url);
+    this.feishu = new FeishuClient(config.app_id, config.app_secret, config.api_base_url, config.work_dir);
     this.store = new SessionStore(workspace, config.work_dir);
     this.botName = config.bot_name || 'MiniMax AI';
     // Restore persisted settings from session state

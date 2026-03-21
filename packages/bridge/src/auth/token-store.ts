@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type { TokenData } from './oauth.js';
 
@@ -22,6 +22,17 @@ export function saveTokens(dataDir: string, tokens: TokenData): void {
   }
   writeFileSync(join(dataDir, TOKENS_FILE), JSON.stringify(tokens, null, 2) + '\n');
   console.log('[auth] tokens saved');
+}
+
+/** Clear stored tokens (e.g., when refresh_token is consumed/invalid). */
+export function clearTokens(dataDir: string): void {
+  const path = join(dataDir, TOKENS_FILE);
+  try {
+    if (existsSync(path)) {
+      unlinkSync(path);
+      console.log('[auth] tokens cleared');
+    }
+  } catch { /* ignore */ }
 }
 
 /**

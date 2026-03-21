@@ -25,7 +25,7 @@ export interface InstallStepProgress {
   error?: string;
 }
 
-const TOTAL_STEPS = 6;
+const TOTAL_STEPS = 4;
 
 /** MLB-dedicated install path — isolated from user's global CC */
 const MLB_BIN_DIR = join(homedir(), '.mlb', 'bin');
@@ -69,88 +69,29 @@ export class ClaudeSetup {
         ],
       });
 
-      // Step 2: Check / Install Homebrew (macOS only)
-      emit(2, 'homebrew', 'running');
-      if (os === 'darwin') {
-        if (this.commandExists('brew')) {
-          emit(2, 'homebrew', 'done', { detail: 'already installed' });
-        } else {
-          emit(2, 'homebrew', 'running', { detail: 'installing Homebrew...' });
-          const brewInstallScript = [
-            'set -e',
-            'export NONINTERACTIVE=1',
-            '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
-            // Apple Silicon: Homebrew installs to /opt/homebrew — add to PATH for this session
-            'if [ -x /opt/homebrew/bin/brew ]; then eval "$(/opt/homebrew/bin/brew shellenv)"; fi',
-            'echo "homebrew installed: $(brew --version | head -1)"',
-          ].join('\n');
-          await this.runShellWithProgress(
-            brewInstallScript,
-            0,
-            (line) => emit(2, 'homebrew', 'running', { detail: line.slice(0, 80) }),
-          );
-          emit(2, 'homebrew', 'done', { detail: 'installed' });
-        }
-      } else {
-        emit(2, 'homebrew', 'done', { detail: 'skipped (not macOS)' });
-      }
-
-      // Step 3: Check / Install FFmpeg
-      emit(3, 'ffmpeg', 'running');
-      if (this.commandExists('ffmpeg')) {
-        emit(3, 'ffmpeg', 'done', { detail: 'already installed' });
-      } else {
-        emit(3, 'ffmpeg', 'running', { detail: 'installing FFmpeg...' });
-        if (os === 'darwin') {
-          await this.runShellWithProgress(
-            'brew install ffmpeg',
-            0,
-            (line) => emit(3, 'ffmpeg', 'running', { detail: line.slice(0, 80) }),
-          );
-        } else {
-          // Linux: try apt first, then yum
-          const linuxInstallScript = [
-            'set -e',
-            'if command -v apt-get >/dev/null 2>&1; then',
-            '  sudo apt-get update -y && sudo apt-get install -y ffmpeg',
-            'elif command -v yum >/dev/null 2>&1; then',
-            '  sudo yum install -y ffmpeg',
-            'else',
-            '  echo "No supported package manager found (apt/yum)" && exit 1',
-            'fi',
-          ].join('\n');
-          await this.runShellWithProgress(
-            linuxInstallScript,
-            0,
-            (line) => emit(3, 'ffmpeg', 'running', { detail: line.slice(0, 80) }),
-          );
-        }
-        emit(3, 'ffmpeg', 'done', { detail: 'installed' });
-      }
-
-      // Step 4: Check existing installation
-      emit(4, 'check', 'running');
+      // Step 2: Check existing installation
+      emit(2, 'check', 'running');
       const existing = this.check();
       if (existing.installed) {
         // Fully installed + configured — skip everything
-        emit(4, 'check', 'done', {
+        emit(2, 'check', 'done', {
           detail: `v${existing.version} — fully configured`,
           config: [
             { key: 'Path', value: existing.path! },
             { key: 'Version', value: existing.version || 'unknown' },
           ],
         });
-        for (let i = 5; i <= TOTAL_STEPS; i++) {
+        for (let i = 3; i <= TOTAL_STEPS; i++) {
           const ids = ['download', 'verify'];
-          emit(i, ids[i - 5] || `step${i}`, 'done', { detail: 'skipped' });
+          emit(i, ids[i - 3] || `step${i}`, 'done', { detail: 'skipped' });
         }
         return existing;
       } else {
-        emit(4, 'check', 'done', { detail: 'not found' });
+        emit(2, 'check', 'done', { detail: 'not found' });
 
-        // Step 5: Download CC binary directly to ~/.mlb/bin/claude
+        // Step 3: Download CC binary directly to ~/.mlb/bin/claude
         // Uses the same GCS source as the official install script, but installs to our own path
-        emit(5, 'download', 'running', { detail: 'fetching latest version...' });
+        emit(3, 'download', 'running', { detail: 'fetching latest version...' });
         if (!existsSync(MLB_BIN_DIR)) mkdirSync(MLB_BIN_DIR, { recursive: true });
 
         const dlOs = platform() === 'darwin' ? 'darwin' : 'linux';
@@ -170,9 +111,9 @@ export class ClaudeSetup {
         await this.runShellWithProgress(
           downloadScript,
           0,
-          (line) => emit(5, 'download', 'running', { detail: line.slice(0, 80) }),
+          (line) => emit(3, 'download', 'running', { detail: line.slice(0, 80) }),
         );
-        emit(5, 'download', 'done', {
+        emit(3, 'download', 'done', {
           config: [
             { key: 'Source', value: 'Google Cloud Storage (official)' },
             { key: 'Target', value: MLB_CLAUDE_PATH },
@@ -180,26 +121,26 @@ export class ClaudeSetup {
         });
       }
 
-      // Step 6: Verify installation + first-run initialization
-      emit(6, 'verify', 'running', { detail: 'verifying...' });
+      // Step 4: Verify installation + first-run initialization
+      emit(4, 'verify', 'running', { detail: 'verifying...' });
       const result = this.check();
       if (!result.installed) throw new Error('claude not found after installation');
 
       // Run `claude -p "hello"` to complete first-run setup (accept ToS, etc.)
       // -p mode skips workspace trust dialog and handles first-run non-interactively
-      emit(6, 'verify', 'running', { detail: 'completing first-run setup...' });
+      emit(4, 'verify', 'running', { detail: 'completing first-run setup...' });
       try {
         await this.runShellWithProgress(
           `"${result.path}" -p "hello" 2>&1 || true`,
           0, // no timeout
-          (line) => emit(6, 'verify', 'running', { detail: line.slice(0, 80) }),
+          (line) => emit(4, 'verify', 'running', { detail: line.slice(0, 80) }),
         );
       } catch {
         // First-run may fail if API is unreachable — that's OK, binary is still installed
         console.warn('[claude-setup] first-run test failed, continuing anyway');
       }
 
-      emit(6, 'verify', 'done', {
+      emit(4, 'verify', 'done', {
         detail: `v${result.version}`,
         config: [
           { key: 'Binary', value: result.path! },
@@ -232,17 +173,6 @@ export class ClaudeSetup {
 
     console.log(`[claude-setup] uninstalled, removed: ${removed.join(', ')}`);
     return { success: true, removed };
-  }
-
-  /** Check if a command exists in the system PATH (login shell) */
-  private commandExists(cmd: string): boolean {
-    try {
-      const shell = process.env.SHELL || '/bin/sh';
-      execSync(`${shell} -lc "command -v ${cmd}"`, { encoding: 'utf-8', timeout: 5000, stdio: 'pipe' });
-      return true;
-    } catch {
-      return false;
-    }
   }
 
   private getVersion(claudePath: string): string | undefined {

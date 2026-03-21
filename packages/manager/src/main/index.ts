@@ -1,7 +1,11 @@
+import fixPath from 'fix-path';
 import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } from 'electron';
 import { join } from 'node:path';
 import { mkdirSync, existsSync } from 'node:fs';
 import { WORKSPACE_ROOT } from '@mlb/shared';
+
+// Fix PATH for macOS .app launch (GUI apps don't inherit shell PATH)
+fixPath();
 import { BridgeProcessManager } from './bridge-process-manager.js';
 import { ConfigStore } from './config-store.js';
 import { AutoStartManager } from './auto-start.js';

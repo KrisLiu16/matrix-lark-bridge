@@ -3,11 +3,15 @@
   "private": true,
   "scripts": {
     "dev:bridge": "pnpm -F @mlb/bridge dev",
-    "dev:manager": "pnpm -F @mlb/manager dev",
+    "dev:manager": "unset ELECTRON_RUN_AS_NODE && pnpm -F @mlb/manager dev",
+    "clean": "rm -rf packages/shared/dist packages/bridge/dist packages/manager/dist && rm -f packages/shared/*.tsbuildinfo packages/bridge/*.tsbuildinfo",
     "build:shared": "pnpm -F @mlb/shared build",
     "build:bridge": "pnpm -F @mlb/bridge build",
-    "build:manager": "pnpm -F @mlb/manager build",
-    "build": "pnpm -r build"
+    "build:manager": "cd packages/manager && npx electron-vite build",
+    "build": "pnpm run build:shared && pnpm run build:bridge && pnpm run build:manager",
+    "rebuild": "pnpm run clean && pnpm run build",
+    "dist": "pnpm run rebuild && pnpm -F @mlb/manager dist",
+    "typecheck": "npx tsc --noEmit --project packages/bridge/tsconfig.json"
   },
   "pnpm": {
     "onlyBuiltDependencies": ["electron", "esbuild"]

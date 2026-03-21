@@ -25,7 +25,7 @@ export interface ForgeProject {
   roles: ForgeRoleConfig[];
   model: string;
   effort: string;
-  maxConcurrent: number;
+  maxConcurrent: number;       // 默认 5，同时运行的 CC 进程上限
   createdAt: string;
   createdBy: string;       // open_id of the user who started it
   chatId: string;          // where to send reports

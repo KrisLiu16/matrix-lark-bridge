@@ -1,0 +1,424 @@
+/**
+ * Forge Engine — Generic multi-agent orchestration loop.
+ *
+ * Flow: setup → [plan → execute(dynamic) → critic(forced) → verify(forced) → iterate] → repeat
+ * Critic and Verifier are framework-enforced, cannot be skipped.
+ */
+import { writeFileSync, readFileSync, existsSync, mkdirSync, appendFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { forgeRun } from './forge-runner.js';
+import { leaderPrompt, criticPrompt, verifierPrompt, dynamicRolePrompt } from './forge-roles.js';
+import { buildForgePrompt } from './forge-context.js';
+import type {
+  ForgeProject, ForgeState, ForgeTask, ForgeIteration, ForgePhase, ForgeEvent,
+} from './types.js';
+
+export class ForgeEngine {
+  private project: ForgeProject;
+  private state: ForgeState;
+  private workDir: string;
+  private statePath: string;
+  private stopped = false;
+  private log: (msg: string) => void;
+  private onEvent?: (event: ForgeEvent) => void;
+
+  constructor(
+    project: ForgeProject,
+    opts?: { log?: (msg: string) => void; onEvent?: (event: ForgeEvent) => void },
+  ) {
+    this.project = project;
+    this.workDir = join(process.env.HOME || '/tmp', '.forge', 'projects', project.id);
+    this.statePath = join(this.workDir, 'forge-state.json');
+    this.log = opts?.log || ((m) => console.log(`[forge:${project.id}] ${m}`));
+    this.onEvent = opts?.onEvent;
+
+    // Load or init state
+    if (existsSync(this.statePath)) {
+      this.state = JSON.parse(readFileSync(this.statePath, 'utf-8'));
+      // Crash recovery: running → pending
+      for (const iter of this.state.iterations) {
+        for (const task of iter.tasks) {
+          if (task.status === 'running') task.status = 'pending';
+        }
+      }
+    } else {
+      this.state = {
+        projectId: project.id,
+        phase: 'setup',
+        currentIteration: 0,
+        iterations: [],
+        totalCostUsd: 0,
+        consecutiveFailures: 0,
+        updatedAt: new Date().toISOString(),
+      };
+    }
+  }
+
+  get currentState(): ForgeState { return this.state; }
+
+  /** Main loop */
+  async run(): Promise<void> {
+    this.initWorkspace();
+    this.log(`Started — ${this.project.title}`);
+
+    while (!this.stopped) {
+      try {
+        switch (this.state.phase) {
+          case 'setup':
+            await this.setup();
+            break;
+          case 'planning':
+            await this.plan();
+            break;
+          case 'executing':
+            await this.executeDynamic();
+            break;
+          case 'critiquing':
+            await this.runCritic();
+            break;
+          case 'verifying':
+            await this.runVerifier();
+            break;
+          case 'iterating':
+            await this.iterate();
+            break;
+          case 'paused':
+          case 'completed':
+            return;
+        }
+      } catch (err) {
+        this.state.consecutiveFailures++;
+        this.log(`Error: ${(err as Error).message}`);
+        if (this.state.consecutiveFailures >= 3) {
+          this.log('Circuit breaker — pausing');
+          this.setPhase('paused');
+          return;
+        }
+        await this.sleep(30_000);
+      }
+    }
+  }
+
+  stop(): void { this.stopped = true; }
+
+  // ========== Phases ==========
+
+  private async setup(): Promise<void> {
+    // Write brief.md
+    writeFileSync(join(this.workDir, 'brief.md'),
+      `# ${this.project.title}\n\n${this.project.description}\n`);
+    writeFileSync(join(this.workDir, 'index.md'), '# 产出索引\n\n');
+    writeFileSync(join(this.workDir, 'status.md'),
+      `# 状态\n\n阶段：初始化\n迭代：0\n`);
+    writeFileSync(join(this.workDir, 'feedback.md'), '');
+    writeFileSync(join(this.workDir, 'iteration-log.md'), '# 迭代日志\n\n');
+
+    this.setPhase('planning');
+  }
+
+  private async plan(): Promise<void> {
+    this.state.currentIteration++;
+    const iterNum = this.state.currentIteration;
+    const iterDir = join(this.workDir, 'iterations', String(iterNum).padStart(3, '0'));
+    mkdirSync(iterDir, { recursive: true });
+
+    this.state.iterations.push({
+      number: iterNum,
+      tasks: [],
+      costUsd: 0,
+      startedAt: new Date().toISOString(),
+    });
+
+    this.log(`Planning iteration ${iterNum}...`);
+
+    const task: ForgeTask = {
+      id: `leader-plan-${iterNum}`,
+      role: 'leader',
+      description: `规划第 ${iterNum} 轮迭代。读取所有成员汇报和 Critic 反馈，分配任务。`,
+      priority: 'high',
+      status: 'running',
+    };
+
+    const result = await forgeRun({
+      workDir: this.workDir,
+      model: this.project.model,
+      effort: this.project.effort,
+      systemPrompt: leaderPrompt(this.project),
+      userPrompt: buildForgePrompt('leader', task, this.project, this.workDir, iterNum),
+      env: this.getEnv(),
+    });
+
+    writeFileSync(join(iterDir, 'plan.md'), result.output);
+    this.addCost(result.costUsd);
+
+    // Parse tasks
+    const tasks = this.parseTasks(result.output, iterNum);
+    const iter = this.currentIter()!;
+    iter.tasks.push(...tasks);
+
+    this.log(`Planned ${tasks.length} tasks`);
+    this.setPhase('executing');
+  }
+
+  private async executeDynamic(): Promise<void> {
+    const iter = this.currentIter()!;
+    const pending = iter.tasks.filter(t => t.status === 'pending');
+
+    if (pending.length === 0) {
+      this.log('No dynamic tasks, moving to critic');
+      this.setPhase('critiquing');
+      return;
+    }
+
+    // Execute tasks sequentially (respecting potential dependencies)
+    for (const task of pending) {
+      const roleConfig = this.project.roles.find(r => r.name === task.role);
+      if (!roleConfig) {
+        this.log(`Unknown role ${task.role}, skipping`);
+        task.status = 'failed';
+        task.error = `Role ${task.role} not found`;
+        continue;
+      }
+
+      task.status = 'running';
+      task.startedAt = new Date().toISOString();
+      this.persist();
+      this.emit('task_start', `${task.role}: ${task.id}`, task.role, task.id);
+
+      const result = await forgeRun({
+        workDir: this.workDir,
+        model: this.project.model,
+        effort: this.project.effort,
+        systemPrompt: dynamicRolePrompt(roleConfig, this.project),
+        userPrompt: buildForgePrompt(task.role, task, this.project, this.workDir, this.state.currentIteration),
+        env: this.getEnv(),
+      });
+
+      task.status = result.success ? 'completed' : 'failed';
+      task.output = result.output;
+      task.costUsd = result.costUsd;
+      task.durationMs = result.durationMs;
+      task.completedAt = new Date().toISOString();
+      task.error = result.error;
+      this.addCost(result.costUsd);
+
+      const icon = result.success ? '✅' : '❌';
+      this.log(`  ${task.id}: ${icon} (${result.durationMs}ms, $${result.costUsd.toFixed(2)})`);
+      this.emit(result.success ? 'task_done' : 'task_fail', `${task.role}: ${task.id}`, task.role, task.id);
+    }
+
+    this.setPhase('critiquing');
+  }
+
+  /** Critic — FORCED, cannot be skipped */
+  private async runCritic(): Promise<void> {
+    this.log('Critic reviewing...');
+    const iterNum = this.state.currentIteration;
+
+    const task: ForgeTask = {
+      id: `critic-${iterNum}`,
+      role: 'critic',
+      description: `严格审查第 ${iterNum} 轮所有产出。读取 reports/ 和 artifacts/，找出所有问题。将反馈写入 feedback.md。`,
+      priority: 'high',
+      status: 'running',
+    };
+
+    const result = await forgeRun({
+      workDir: this.workDir,
+      model: this.project.model,
+      effort: this.project.effort,
+      systemPrompt: criticPrompt(this.project),
+      userPrompt: buildForgePrompt('critic', task, this.project, this.workDir, iterNum),
+      env: this.getEnv(),
+    });
+
+    // Write critic feedback (this is what drives improvement)
+    if (result.success && result.output) {
+      writeFileSync(join(this.workDir, 'feedback.md'),
+        `# Critic 反馈 — 迭代 ${iterNum}\n\n${result.output}`);
+      writeFileSync(join(this.workDir, 'reports', 'critic-report.md'), result.output);
+    }
+
+    this.addCost(result.costUsd);
+    const iter = this.currentIter()!;
+    iter.criticFeedback = result.output;
+    this.log(`Critic: ${result.success ? '✅' : '❌'} ($${result.costUsd.toFixed(2)})`);
+    this.emit('critic', `Critic completed`, 'critic');
+
+    this.setPhase('verifying');
+  }
+
+  /** Verifier — FORCED, can BLOCK */
+  private async runVerifier(): Promise<void> {
+    this.log('Verifier checking...');
+    const iterNum = this.state.currentIteration;
+
+    // Validate index
+    const broken = this.validateIndex();
+    if (broken.length > 0) {
+      this.log(`⚠️ ${broken.length} broken index links`);
+    }
+
+    const task: ForgeTask = {
+      id: `verifier-${iterNum}`,
+      role: 'verifier',
+      description: `核查第 ${iterNum} 轮所有产出的真实性。` +
+        (broken.length > 0 ? `\n⚠️ 索引有 ${broken.length} 个断链：${broken.join(', ')}` : ''),
+      priority: 'high',
+      status: 'running',
+    };
+
+    const result = await forgeRun({
+      workDir: this.workDir,
+      model: this.project.model,
+      effort: this.project.effort,
+      systemPrompt: verifierPrompt(this.project),
+      userPrompt: buildForgePrompt('verifier', task, this.project, this.workDir, iterNum),
+      env: this.getEnv(),
+    });
+
+    this.addCost(result.costUsd);
+    const iter = this.currentIter()!;
+    iter.verifierResult = result.output;
+    writeFileSync(join(this.workDir, 'reports', 'verifier-report.md'), result.output || '');
+
+    if (result.output?.includes('❌')) {
+      this.log('❌ Verifier found issues — appending to feedback');
+      appendFileSync(join(this.workDir, 'feedback.md'),
+        `\n\n# Verifier 问题 — 迭代 ${iterNum}\n\n${result.output}`);
+    }
+
+    this.log(`Verifier: ${result.success ? '✅' : '❌'} ($${result.costUsd.toFixed(2)})`);
+    this.setPhase('iterating');
+  }
+
+  private async iterate(): Promise<void> {
+    const iterNum = this.state.currentIteration;
+
+    // Leader reviews and summarizes
+    const task: ForgeTask = {
+      id: `leader-iterate-${iterNum}`,
+      role: 'leader',
+      description: `总结第 ${iterNum} 轮。读取 Critic 反馈和 Verifier 报告，决定下一轮重点。写反思到 iteration-log.md。`,
+      priority: 'high',
+      status: 'running',
+    };
+
+    const result = await forgeRun({
+      workDir: this.workDir,
+      model: this.project.model,
+      effort: this.project.effort,
+      systemPrompt: leaderPrompt(this.project),
+      userPrompt: buildForgePrompt('leader', task, this.project, this.workDir, iterNum),
+      env: this.getEnv(),
+    });
+
+    this.addCost(result.costUsd);
+
+    // Append to iteration log
+    appendFileSync(join(this.workDir, 'iteration-log.md'),
+      `\n## 迭代 ${iterNum}\n${result.output?.substring(0, 2000) || ''}\n`);
+
+    // Update status
+    writeFileSync(join(this.workDir, 'status.md'),
+      `# 状态\n\n阶段：迭代 ${iterNum} 完成\n迭代：${iterNum}\n费用：$${this.state.totalCostUsd.toFixed(2)}\n`);
+
+    const iter = this.currentIter()!;
+    iter.leaderSummary = result.output;
+    iter.completedAt = new Date().toISOString();
+
+    this.log(`Iteration ${iterNum} complete`);
+    this.state.consecutiveFailures = 0;
+    this.setPhase('planning'); // Next iteration
+  }
+
+  // ========== Helpers ==========
+
+  private initWorkspace(): void {
+    for (const d of ['', 'reports', 'artifacts', 'iterations']) {
+      mkdirSync(join(this.workDir, d), { recursive: true });
+    }
+  }
+
+  private setPhase(phase: ForgePhase): void {
+    this.state.phase = phase;
+    this.persist();
+    this.emit('phase', `Phase → ${phase}`);
+  }
+
+  private addCost(usd: number): void {
+    this.state.totalCostUsd += usd;
+    const iter = this.currentIter();
+    if (iter) iter.costUsd += usd;
+    this.persist();
+  }
+
+  private currentIter(): ForgeIteration | undefined {
+    return this.state.iterations[this.state.iterations.length - 1];
+  }
+
+  private persist(): void {
+    this.state.updatedAt = new Date().toISOString();
+    writeFileSync(this.statePath, JSON.stringify(this.state, null, 2));
+  }
+
+  private emit(type: ForgeEvent['type'], message: string, role?: string, taskId?: string): void {
+    this.log(message);
+    this.onEvent?.({ type, message, role, taskId, timestamp: new Date().toISOString() });
+  }
+
+  private getEnv(): Record<string, string> {
+    return {
+      ...(process.env.ANTHROPIC_BASE_URL ? { ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL } : {}),
+      ...(process.env.ANTHROPIC_AUTH_TOKEN ? { ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN } : {}),
+      ...(process.env.ANTHROPIC_CUSTOM_HEADERS ? { ANTHROPIC_CUSTOM_HEADERS: process.env.ANTHROPIC_CUSTOM_HEADERS } : {}),
+    };
+  }
+
+  private parseTasks(output: string, iterNum: number): ForgeTask[] {
+    const match = output.match(/```json\s*([\s\S]*?)```/);
+    if (!match) return this.fallbackTasks(iterNum);
+    try {
+      const parsed = JSON.parse(match[1]);
+      return (parsed.tasks || []).map((t: any) => ({
+        id: t.id || `${t.role}-${iterNum}-${Math.random().toString(36).slice(2, 6)}`,
+        role: t.role,
+        description: t.description,
+        priority: t.priority || 'medium',
+        status: 'pending' as const,
+      }));
+    } catch {
+      return this.fallbackTasks(iterNum);
+    }
+  }
+
+  private fallbackTasks(iterNum: number): ForgeTask[] {
+    // Use first dynamic role as fallback
+    const first = this.project.roles[0];
+    return first ? [{
+      id: `${first.name}-${iterNum}-fallback`,
+      role: first.name,
+      description: `继续推进项目 ${this.project.title}`,
+      priority: 'medium' as const,
+      status: 'pending' as const,
+    }] : [];
+  }
+
+  private validateIndex(): string[] {
+    const indexPath = join(this.workDir, 'index.md');
+    if (!existsSync(indexPath)) return [];
+    const content = readFileSync(indexPath, 'utf-8');
+    const broken: string[] = [];
+    for (const line of content.split('\n')) {
+      const m = line.match(/→\s*(.+?\.\w+)\s*$/);
+      if (m && !existsSync(join(this.workDir, m[1]))) {
+        broken.push(m[1]);
+      }
+    }
+    return broken;
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(r => setTimeout(r, ms));
+  }
+}

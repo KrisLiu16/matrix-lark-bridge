@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { useDeepForgeStore, type DeepForgeProject } from '../stores/deepforge-store';
 
 const PHASE_COLORS: Record<string, { bg: string; text: string; dot: string }> = {
@@ -6,6 +6,7 @@ const PHASE_COLORS: Record<string, { bg: string; text: string; dot: string }> = 
   planning: { bg: 'bg-blue-50 dark:bg-blue-900/30', text: 'text-blue-700 dark:text-blue-400', dot: 'bg-blue-500' },
   executing: { bg: 'bg-emerald-50 dark:bg-emerald-900/30', text: 'text-emerald-700 dark:text-emerald-400', dot: 'bg-emerald-500' },
   paused: { bg: 'bg-amber-50 dark:bg-amber-900/30', text: 'text-amber-700 dark:text-amber-400', dot: 'bg-amber-500' },
+  completing: { bg: 'bg-purple-50 dark:bg-purple-900/30', text: 'text-purple-700 dark:text-purple-400', dot: 'bg-purple-500' },
   completed: { bg: 'bg-slate-50 dark:bg-slate-700/30', text: 'text-slate-600 dark:text-slate-400', dot: 'bg-slate-400' },
   failed: { bg: 'bg-red-50 dark:bg-red-900/30', text: 'text-red-700 dark:text-red-400', dot: 'bg-red-500' },
   error: { bg: 'bg-red-50 dark:bg-red-900/30', text: 'text-red-700 dark:text-red-400', dot: 'bg-red-500' },
@@ -26,6 +27,7 @@ const PHASE_LABELS: Record<string, string> = {
   planning: '规划中',
   executing: '执行中',
   paused: '已暂停',
+  completing: '打包中',
   completed: '已完成',
   failed: '失败',
   error: '错误',
@@ -305,7 +307,7 @@ export default function DeepForgeDashboard() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M15.362 5.214A8.252 8.252 0 0 1 12 21 8.25 8.25 0 0 1 6.038 7.047 8.287 8.287 0 0 0 9 9.601a8.983 8.983 0 0 1 3.361-6.867 8.21 8.21 0 0 0 3 2.48Z" />
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 18a3.75 3.75 0 0 0 .495-7.468 5.99 5.99 0 0 0-1.925 3.547 5.975 5.975 0 0 1-2.133-1.001A3.75 3.75 0 0 0 12 18Z" />
           </svg>
-          <h1 className="text-sm font-semibold">DeepDeepForge 控制台</h1>
+          <h1 className="text-sm font-semibold">DeepForge 控制台</h1>
           <span className="text-xs text-slate-500 dark:text-slate-400">
             {projects.length} 个项目
           </span>
@@ -330,7 +332,7 @@ export default function DeepForgeDashboard() {
         ) : error ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-center text-slate-400 dark:text-slate-600">
-              <p className="text-sm">加载 DeepDeepForge 项目失败</p>
+              <p className="text-sm">加载 DeepForge 项目失败</p>
               <p className="text-xs mt-1">{error}</p>
             </div>
           </div>
@@ -340,7 +342,7 @@ export default function DeepForgeDashboard() {
               <svg className="w-12 h-12 mx-auto mb-3 opacity-30" fill="none" viewBox="0 0 24 24" strokeWidth="1" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M15.362 5.214A8.252 8.252 0 0 1 12 21 8.25 8.25 0 0 1 6.038 7.047 8.287 8.287 0 0 0 9 9.601a8.983 8.983 0 0 1 3.361-6.867 8.21 8.21 0 0 0 3 2.48Z" />
               </svg>
-              <p className="text-sm">暂无 DeepDeepForge 项目</p>
+              <p className="text-sm">暂无 DeepForge 项目</p>
               <p className="text-xs mt-1">~/.forge/projects/ 和 ~/.deepforge/projects/ 中的项目会显示在这里</p>
             </div>
           </div>
@@ -406,7 +408,7 @@ function ProjectCard({ project, onClick }: { project: DeepForgeProject; onClick:
           迭代 {project.currentIteration}/{project.totalIterations || '?'}
         </span>
         <span className="flex items-center gap-1">
-          {(project.totalTokens || 0).toLocaleString()} tokens
+          {project.createdAt ? formatElapsed(project.createdAt) : '—'}
         </span>
         <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-400">
           {project.source}
@@ -477,10 +479,19 @@ function ProjectDetail({
   const [expandedTask, setExpandedTask] = useState<number | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [packageLogs, setPackageLogs] = useState<string[]>([]);
+  const [showPackageModal, setShowPackageModal] = useState(false);
+  const packageLogsEndRef = useRef<HTMLDivElement>(null);
   // Force re-render for elapsed time on running tasks
   const [, setTick] = useState(0);
 
-  const { fetchProjects } = useDeepForgeStore();
+  const { fetchProjects, pollDetail } = useDeepForgeStore();
+
+  // Poll detail state every 5 seconds to keep iterations/tasks in sync
+  useEffect(() => {
+    const interval = setInterval(pollDetail, 5000);
+    return () => clearInterval(interval);
+  }, [pollDetail]);
 
   const handleStop = async () => {
     if (!project) return;
@@ -504,6 +515,51 @@ function ProjectDetail({
       await fetchProjects();
     } catch (err) {
       alert(`继续失败: ${(err as Error).message}`);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // Subscribe to package progress
+  useEffect(() => {
+    if (!showPackageModal) return;
+    const unsub = window.mlb.deepforge.onPackageProgress(({ projectId: pid, step }) => {
+      if (project && pid === project.id) {
+        setPackageLogs(prev => [...prev, `[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] ${step}`]);
+      }
+    });
+    return unsub;
+  }, [showPackageModal, project?.id]);
+
+  // Auto-scroll package logs
+  useEffect(() => {
+    packageLogsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [packageLogs]);
+
+  const handlePackage = async () => {
+    if (!project) return;
+    setPackageLogs([]);
+    setShowPackageModal(true);
+    setActionLoading('package');
+    try {
+      const result = await window.mlb.deepforge.package(project.id);
+      setPackageLogs(prev => [...prev, `✅ 完成！产出路径: ${result.path}`]);
+    } catch (err) {
+      setPackageLogs(prev => [...prev, `❌ 失败: ${(err as Error).message}`]);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleRestart = async () => {
+    if (!project) return;
+    if (!confirm('将用最新代码重新启动，保留已有进度。确定吗？')) return;
+    try {
+      setActionLoading('resume');
+      await window.mlb.deepforge.resume(project.id);
+      await fetchProjects();
+    } catch (err) {
+      alert(`重启失败: ${(err as Error).message}`);
     } finally {
       setActionLoading(null);
     }
@@ -571,14 +627,26 @@ function ProjectDetail({
           >
             打开目录
           </button>
-          {project.phase === 'paused' && (
+          {/* Package deliverables — available when not running */}
+          {!project.isRunning && (
             <button
-              onClick={handleResume}
+              onClick={handlePackage}
+              disabled={actionLoading === 'package'}
+              className="text-xs px-2.5 py-1 rounded-lg bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 hover:bg-purple-100 dark:hover:bg-purple-900/50 transition-colors disabled:opacity-50"
+              title="整理产出并打包"
+            >
+              {actionLoading === 'package' ? '打包中...' : '整理产出'}
+            </button>
+          )}
+          {/* Restart with new code — available when paused/completed */}
+          {!project.isRunning && (
+            <button
+              onClick={handleRestart}
               disabled={actionLoading === 'resume'}
               className="text-xs px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-colors disabled:opacity-50"
-              title="继续执行任务"
+              title="用最新代码重新启动，保留已有进度"
             >
-              {actionLoading === 'resume' ? '启动中...' : '继续'}
+              {actionLoading === 'resume' ? '启动中...' : '重新执行'}
             </button>
           )}
           {project.isRunning && (
@@ -598,8 +666,27 @@ function ProjectDetail({
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
         <StatCard label="阶段" value={PHASE_LABELS[project.phase] || project.phase} />
         <StatCard label="迭代" value={`${project.currentIteration}/${project.totalIterations || '?'}`} />
-        <StatCard label="Tokens" value={`${(project.totalTokens || 0).toLocaleString()}`} />
-        <StatCard label="来源" value={project.source} />
+        <StatCard label="运行时长" value={project.createdAt ? formatElapsed(project.createdAt) : '—'} />
+        <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-3">
+          <div className="text-[10px] uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-1">最大并发</div>
+          <select
+            value={project.maxConcurrent || 5}
+            onChange={async (e) => {
+              const val = parseInt(e.target.value, 10);
+              try {
+                await window.mlb.deepforge.setConfig(project.id, 'maxConcurrent', val);
+                await fetchProjects();
+              } catch (err) {
+                alert(`设置失败: ${(err as Error).message}`);
+              }
+            }}
+            className="w-full text-lg font-semibold bg-transparent text-slate-800 dark:text-slate-200 border-none outline-none cursor-pointer"
+          >
+            {[1, 2, 3, 5, 8, 10, 15].map(n => (
+              <option key={n} value={n}>{n}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {/* Tasks section */}
@@ -636,6 +723,7 @@ function ProjectDetail({
                 key={i}
                 task={task}
                 index={i}
+                projectId={project.id}
                 isExpanded={expandedTask === i}
                 onToggle={() => setExpandedTask(expandedTask === i ? null : i)}
               />
@@ -760,6 +848,58 @@ function ProjectDetail({
           </div>
         )}
       </div>
+
+      {/* Package progress modal */}
+      {showPackageModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-[560px] max-h-[70vh] flex flex-col border border-slate-200 dark:border-slate-700">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-slate-700">
+              <div className="flex items-center gap-2">
+                <span className="text-base font-semibold text-slate-800 dark:text-slate-200">整理产出</span>
+                {actionLoading === 'package' && (
+                  <span className="inline-block w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
+                )}
+              </div>
+              {actionLoading !== 'package' && (
+                <button
+                  onClick={() => setShowPackageModal(false)}
+                  className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
+                >
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              )}
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 font-mono text-xs leading-relaxed text-slate-600 dark:text-slate-400 bg-slate-50 dark:bg-slate-900/50">
+              {packageLogs.length === 0 ? (
+                <p className="text-slate-400 dark:text-slate-500">等待 Agent 启动...</p>
+              ) : (
+                packageLogs.map((line, i) => (
+                  <div key={i} className={`py-0.5 ${
+                    line.includes('✅') ? 'text-emerald-600 dark:text-emerald-400 font-medium' :
+                    line.includes('❌') ? 'text-red-500 dark:text-red-400 font-medium' :
+                    line.includes('⚠️') ? 'text-amber-500 dark:text-amber-400' : ''
+                  }`}>
+                    {line}
+                  </div>
+                ))
+              )}
+              <div ref={packageLogsEndRef} />
+            </div>
+            {actionLoading !== 'package' && (
+              <div className="px-5 py-3 border-t border-slate-200 dark:border-slate-700 flex justify-end">
+                <button
+                  onClick={() => setShowPackageModal(false)}
+                  className="text-xs px-4 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
+                >
+                  关闭
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -769,11 +909,13 @@ function ProjectDetail({
 function TaskCard({
   task,
   index,
+  projectId,
   isExpanded,
   onToggle,
 }: {
   task: DeepForgeProject['tasks'][number];
   index: number;
+  projectId: string;
   isExpanded: boolean;
   onToggle: () => void;
 }) {
@@ -860,6 +1002,22 @@ function TaskCard({
         >
           {STATUS_LABELS[task.status] || task.status}
         </span>
+
+        {/* Terminal attach button — visible for running/completed/failed tasks with an id */}
+        {task.id && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              window.mlb.deepforge.attach(projectId, task.id!);
+            }}
+            className="shrink-0 p-1 rounded-md text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+            title="在终端中查看日志"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="m6.75 7.5 3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0 0 21 18V6a2.25 2.25 0 0 0-2.25-2.25H5.25A2.25 2.25 0 0 0 3 6v12a2.25 2.25 0 0 0 2.25 2.25Z" />
+            </svg>
+          </button>
+        )}
 
         {/* Expand arrow */}
         {hasExpandable && (

@@ -68,7 +68,7 @@ export default function Sidebar() {
           </button>
         </div>
 
-        {/* DeepDeepForge Dashboard link */}
+        {/* DeepForge Dashboard link */}
         <div className="px-3 pb-2">
           <button
             onClick={() => navigate('forge')}

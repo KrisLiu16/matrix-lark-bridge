@@ -42,6 +42,7 @@ export type ForgePhase =
   | 'critiquing'    // Critic reviews all output (forced)
   | 'verifying'     // Verifier checks facts (forced)
   | 'iterating'     // Leader summarizes and decides next
+  | 'completing'    // Packaging deliverables and generating report
   | 'paused'
   | 'completed';
 

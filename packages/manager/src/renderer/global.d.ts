@@ -38,8 +38,8 @@ interface MlbAPI {
     list(): Promise<{
       id: string; title: string; phase: string; currentIteration: number;
       totalIterations: number; totalCostUsd: number; totalTokens: number;
-      isRunning: boolean; source: string;
-      tasks: { role: string; status: string; description?: string; error?: string; output?: string; startedAt?: string }[];
+      isRunning: boolean; source: string; maxConcurrent: number;
+      tasks: { id?: string; role: string; status: string; description?: string; error?: string; output?: string; startedAt?: string }[];
     }[]>;
     status(projectId: string): Promise<any>;
     logs(projectId: string, lines?: number): Promise<string[]>;
@@ -49,6 +49,10 @@ interface MlbAPI {
     resume(projectId: string): Promise<void>;
     delete(projectId: string): Promise<void>;
     inject(projectId: string, message: string): Promise<void>;
+    package(projectId: string): Promise<{ path: string }>;
+    onPackageProgress(callback: (data: { projectId: string; step: string }) => void): () => void;
+    setConfig(projectId: string, key: string, value: any): Promise<void>;
+    attach(projectId: string, taskId: string): Promise<void>;
   };
   system: {
     getWorkspaceRoot(): Promise<string>;

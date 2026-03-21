@@ -5,7 +5,7 @@
  * Critic and Verifier are framework-enforced, cannot be skipped.
  * Index validation is done automatically by the framework (validateIndex), not a separate agent.
  */
-import { writeFileSync, readFileSync, existsSync, mkdirSync, appendFileSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, mkdirSync, appendFileSync, readdirSync, statSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { forgeRun } from './forge-runner.js';
 import { leaderPrompt, criticPrompt, verifierPrompt, dynamicRolePrompt } from './forge-roles.js';
@@ -37,7 +37,10 @@ export class ForgeEngine {
     this.project = project;
     this.workDir = join(process.env.HOME || '/tmp', '.deepforge', 'projects', project.id);
     this.statePath = join(this.workDir, 'forge-state.json');
-    this.log = opts?.log || ((m) => console.log(`[forge:${project.id}] ${m}`));
+    this.log = opts?.log || ((m) => {
+      const t = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+      console.log(`[${t}] [forge:${project.id}] ${m}`);
+    });
     this.onEvent = opts?.onEvent;
     this.onNotify = opts?.onNotify;
     this.notifier = new ForgeNotifier(this.workDir);
@@ -102,6 +105,9 @@ export class ForgeEngine {
           case 'iterating':
             await this.iterate();
             break;
+          case 'completing':
+            await this.runCompletion();
+            return;
           case 'paused':
           case 'completed':
             return;
@@ -183,6 +189,7 @@ export class ForgeEngine {
       userPrompt: buildForgePrompt('leader', task, this.project, this.workDir, iterNum),
       env: this.getEnv(),
       taskId: task.id,
+      timeoutMs: 60 * 60 * 1000, // 1 hour
     });
 
     task.status = result.success ? 'completed' : 'failed';
@@ -190,12 +197,43 @@ export class ForgeEngine {
     task.durationMs = result.durationMs;
     task.completedAt = new Date().toISOString();
     task.error = result.error;
+    this.persist(); // Persist immediately so GUI sees Leader plan completed
+
+    if (!result.success) this.reportTaskError(task, result.error);
 
     writeFileSync(join(iterDir, 'plan.md'), result.output);
     this.addCost(result.costUsd);
 
     // Parse tasks from leader output and add to iteration
     const newTasks = this.parseTasks(result.output, iterNum);
+
+    // Code-level guard: warn about oversized tasks
+    const oversized = newTasks.filter(t => t.description && t.description.length > 300);
+    if (oversized.length > 0) {
+      const warning = `\n\n# ⚠️ 系统警告 — 任务粒度过大\n\n` +
+        `以下 ${oversized.length} 个任务描述过长（>300字符），很可能会超时失败：\n` +
+        oversized.map(t => `- **${t.id}**（${t.description.length}字符）: ${t.description.substring(0, 100)}...`).join('\n') +
+        `\n\nLeader 下一轮必须将这些任务拆分成多个小任务并行执行。\n` +
+        `**规则**：每个任务只做一件事，30分钟内必须完成。\n`;
+      appendFileSync(join(this.workDir, 'feedback.md'), warning);
+      this.log(`⚠️ ${oversized.length} tasks have oversized descriptions (>300 chars) — may timeout`);
+    }
+
+    // Check if previous iteration had timeouts, inject reminder
+    if (this.state.currentIteration > 1) {
+      const prevIter = this.state.iterations[this.state.iterations.length - 2];
+      if (prevIter) {
+        const timedOut = prevIter.tasks.filter(t => t.status === 'failed' && t.error?.includes('timed out'));
+        if (timedOut.length > 0) {
+          const reminder = `\n\n# ⚠️ 上轮超时警告\n\n` +
+            `上一轮有 ${timedOut.length} 个任务因超时失败：\n` +
+            timedOut.map(t => `- **${t.id}**（${t.role}）: ${t.description}`).join('\n') +
+            `\n\n必须将这些任务拆分成更小的子任务重新分配。\n`;
+          appendFileSync(join(this.workDir, 'feedback.md'), reminder);
+        }
+      }
+    }
+
     iter.tasks.push(...newTasks);
 
     this.log(`Planned ${newTasks.length} tasks`);
@@ -203,6 +241,9 @@ export class ForgeEngine {
   }
 
   private async executeDynamic(): Promise<void> {
+    // Hot-reload maxConcurrent from config
+    this.reloadConfig();
+
     const iter = this.currentIter()!;
     const pending = iter.tasks.filter(t => t.status === 'pending');
 
@@ -245,11 +286,11 @@ export class ForgeEngine {
         const result = await forgeRun({
           workDir: this.workDir,
           model: this.project.model,
-          effort: this.project.effort,
+          effort: 'medium', // Dynamic roles use medium to avoid long execution
           systemPrompt: dynamicRolePrompt(roleConfig, this.project),
           userPrompt: buildForgePrompt(task.role, task, this.project, this.workDir, this.state.currentIteration),
           env: this.getEnv(),
-      taskId: task.id,
+          taskId: task.id,
         });
 
         task.status = result.success ? 'completed' : 'failed';
@@ -261,8 +302,10 @@ export class ForgeEngine {
         this.addCost(result.costUsd);
 
         const icon = result.success ? '✅' : '❌';
-        this.log(`  ${task.id}: ${icon} (${result.durationMs}ms, $${result.costUsd.toFixed(2)})`);
+        this.log(`  ${task.id}: ${icon} (${this.fmtDuration(result.durationMs)})`);
         this.emit(result.success ? 'task_done' : 'task_fail', `${task.role}: ${task.id}`, task.role, task.id);
+
+        if (!result.success) this.reportTaskError(task, result.error);
       } finally {
         running--;
       }
@@ -296,6 +339,7 @@ export class ForgeEngine {
       userPrompt: buildForgePrompt('critic', task, this.project, this.workDir, iterNum),
       env: this.getEnv(),
       taskId: task.id,
+      timeoutMs: 60 * 60 * 1000, // 1 hour // Critic: 15 min max
     });
 
     // Write critic feedback, preserving user's BINDING requirements
@@ -316,11 +360,14 @@ export class ForgeEngine {
     task.durationMs = result.durationMs;
     task.completedAt = new Date().toISOString();
     task.error = result.error;
+    this.persist(); // Persist immediately so GUI sees Critic completed
 
     this.addCost(result.costUsd);
     if (iter) iter.criticFeedback = result.output;
-    this.log(`Critic: ${result.success ? '✅' : '❌'} ($${result.costUsd.toFixed(2)})`);
+    this.log(`Critic: ${result.success ? '✅' : '❌'} (${this.fmtDuration(result.durationMs)})`);
     this.emit('critic', `Critic completed`, 'critic');
+
+    if (!result.success) this.reportTaskError(task, result.error);
 
     this.setPhase('verifying');
   }
@@ -356,6 +403,7 @@ export class ForgeEngine {
       userPrompt: buildForgePrompt('verifier', task, this.project, this.workDir, iterNum),
       env: this.getEnv(),
       taskId: task.id,
+      timeoutMs: 60 * 60 * 1000, // 1 hour // Verifier: 15 min max
     });
 
     task.status = result.success ? 'completed' : 'failed';
@@ -363,6 +411,7 @@ export class ForgeEngine {
     task.durationMs = result.durationMs;
     task.completedAt = new Date().toISOString();
     task.error = result.error;
+    this.persist(); // Persist immediately so GUI sees Verifier completed
 
     this.addCost(result.costUsd);
     if (iter) iter.verifierResult = result.output;
@@ -374,7 +423,10 @@ export class ForgeEngine {
         `\n\n# Verifier 问题 — 迭代 ${iterNum}\n\n${result.output}`);
     }
 
-    this.log(`Verifier: ${result.success ? '✅' : '❌'} ($${result.costUsd.toFixed(2)})`);
+    this.log(`Verifier: ${result.success ? '✅' : '❌'} (${this.fmtDuration(result.durationMs)})`);
+
+    if (!result.success) this.reportTaskError(task, result.error);
+
     this.setPhase('iterating');
   }
 
@@ -402,6 +454,7 @@ export class ForgeEngine {
       userPrompt: buildForgePrompt('leader', task, this.project, this.workDir, iterNum),
       env: this.getEnv(),
       taskId: task.id,
+      timeoutMs: 5 * 60 * 1000, // Leader iterate: 5 min max (summarize + decide, not execute)
     });
 
     task.status = result.success ? 'completed' : 'failed';
@@ -409,6 +462,7 @@ export class ForgeEngine {
     task.durationMs = result.durationMs;
     task.completedAt = new Date().toISOString();
     task.error = result.error;
+    this.persist(); // Persist immediately so GUI sees iterate completed
 
     this.addCost(result.costUsd);
 
@@ -418,7 +472,7 @@ export class ForgeEngine {
 
     // Update status
     writeFileSync(join(this.workDir, 'status.md'),
-      `# 状态\n\n阶段：迭代 ${iterNum} 完成\n迭代：${iterNum}\n费用：$${this.state.totalCostUsd.toFixed(2)}\n`);
+      `# 状态\n\n阶段：迭代 ${iterNum} 完成\n迭代：${iterNum}\n`);
 
     if (iter) {
       iter.leaderSummary = result.output;
@@ -427,7 +481,263 @@ export class ForgeEngine {
 
     this.log(`Iteration ${iterNum} complete`);
     this.state.consecutiveFailures = 0;
-    this.setPhase('planning'); // Next iteration
+
+    // Check if Leader declared project complete
+    if (result.output?.trim().startsWith('PROJECT_COMPLETE')) {
+      this.log('Leader declared PROJECT_COMPLETE — entering completion phase');
+      this.setPhase('completing');
+    } else {
+      this.setPhase('planning'); // Next iteration
+    }
+  }
+
+  // ========== Completion ==========
+
+  /** Package deliverables using a dedicated CC agent */
+  private async runCompletion(): Promise<void> {
+    this.log('Spawning packager agent to organize deliverables...');
+
+    const task: ForgeTask = {
+      id: `packager-${this.state.currentIteration}`,
+      role: 'packager',
+      description: '整理产出并生成报告',
+      priority: 'high',
+      status: 'running',
+      startedAt: new Date().toISOString(),
+    };
+
+    const iter = this.currentIter();
+    if (iter) { iter.tasks.push(task); this.persist(); }
+
+    const result = await forgeRun({
+      workDir: this.workDir,
+      model: this.project.model,
+      effort: this.project.effort,
+      systemPrompt: this.packagerPrompt(),
+      userPrompt: this.packagerTask(),
+      env: this.getEnv(),
+      taskId: task.id,
+      timeoutMs: 60 * 60 * 1000, // 1 hour
+    });
+
+    task.status = result.success ? 'completed' : 'failed';
+    task.costUsd = result.costUsd;
+    task.durationMs = result.durationMs;
+    task.completedAt = new Date().toISOString();
+    task.error = result.error;
+    this.addCost(result.costUsd);
+    this.persist();
+
+    // Send notification
+    const nId = `complete-${this.project.id}-${Date.now()}`;
+    const notification: ForgeNotification = {
+      id: nId,
+      from: 'packager',
+      type: 'action_needed',
+      title: `项目完成: ${this.project.title}`,
+      detail: `项目已完成全部迭代（共 ${this.state.currentIteration} 轮）。\n` +
+        `Packager 已整理产出至 deliverables/ 目录。\n\n` +
+        `请选择:\n1. 确认完成\n2. 继续迭代 — 注入反馈让 Leader 继续`,
+      blocking: true,
+      createdAt: new Date().toISOString(),
+    };
+    writeFileSync(
+      join(this.workDir, 'notifications', 'pending', `${nId}.json`),
+      JSON.stringify(notification, null, 2),
+    );
+
+    this.setPhase('completed');
+    this.log('Project completed. Packager has organized deliverables.');
+  }
+
+  private packagerPrompt(): string {
+    return `你是产出整理员（Packager），负责在项目完成后整理所有产出。
+
+## 你的职责
+分析工作目录，区分"产物"和"过程文件"，将产物整理到 deliverables/ 目录并生成专业报告。
+
+## 文件分类规则
+
+### 产物（需要保留）：
+- artifacts/ 下的所有文件（代码、文档、数据、图表）
+- reports/ 下的最终版本报告
+- 用户明确要求的输出文件
+
+### 过程文件（不需要复制到 deliverables/，但不要删除）：
+- forge-state.json（状态持久化）
+- task-logs/（执行日志）
+- iterations/（迭代计划）
+- notifications/（通知）
+- feedback.md, status.md, index.md（过程文件）
+- brief.md（任务描述）
+
+## 输出要求
+1. 将产物复制到 deliverables/ 目录，按类别分文件夹整理
+2. 在 deliverables/ 下生成 report.html — 专业的项目报告
+3. 将 deliverables/ 打包成 zip 压缩包
+4. 在 reports/packager-report.md 写汇报
+
+## report.html 设计要求
+- 静态 HTML，深色简约风格（参考 Anthropic 官网的克制美学，不要五彩斑斓）
+- 包含：项目概述、迭代历程、产出清单（文件名+大小+相对路径）、关键成果总结
+- 字体用系统字体栈，不依赖外部资源
+- 中文`;
+  }
+
+  private packagerTask(): string {
+    // Read index.md and iteration-log for context
+    const indexPath = join(this.workDir, 'index.md');
+    const indexContent = existsSync(indexPath) ? readFileSync(indexPath, 'utf-8') : '（空）';
+    const iterLogPath = join(this.workDir, 'iteration-log.md');
+    const iterLog = existsSync(iterLogPath)
+      ? readFileSync(iterLogPath, 'utf-8').substring(0, 3000)
+      : '（空）';
+
+    return `项目 "${this.project.title}" 已完成 ${this.state.currentIteration} 轮迭代。
+
+工作目录：${this.workDir}
+
+## index.md（产出索引）
+${indexContent}
+
+## 迭代日志（摘要）
+${iterLog}
+
+请开始整理产出：
+1. 读取工作目录，理解文件结构
+2. 将产物复制到 deliverables/ 目录
+3. 生成 report.html
+4. 执行 zip 打包：cd deliverables && zip -r ../${this.project.id}-deliverables.zip .
+5. 写 reports/packager-report.md 汇报`;
+  }
+
+  /** Collect all files recursively from a directory */
+  private collectFiles(dir: string): string[] {
+    if (!existsSync(dir)) return [];
+    const result: string[] = [];
+    const entries = readdirSync(dir);
+    for (const entry of entries) {
+      const full = join(dir, entry);
+      try {
+        const st = statSync(full);
+        if (st.isDirectory()) result.push(...this.collectFiles(full));
+        else result.push(full);
+      } catch { /* skip */ }
+    }
+    return result;
+  }
+
+  /** Generate an Anthropic-style HTML report */
+  private generateReport(files: string[]): string {
+    const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+    const iterCount = this.state.currentIteration;
+    const totalCost = this.state.totalCostUsd.toFixed(2);
+    const elapsed = Date.now() - new Date(this.state.iterations[0]?.startedAt || Date.now()).getTime();
+    const hours = Math.floor(elapsed / 3600000);
+    const mins = Math.floor((elapsed % 3600000) / 60000);
+
+    // Read index.md for artifact listing
+    const indexPath = join(this.workDir, 'index.md');
+    const indexContent = existsSync(indexPath) ? readFileSync(indexPath, 'utf-8') : '';
+
+    // Read iteration log for summary
+    const iterLogPath = join(this.workDir, 'iteration-log.md');
+    const iterLog = existsSync(iterLogPath) ? readFileSync(iterLogPath, 'utf-8') : '';
+
+    // Parse file listing
+    const fileRows = files.map(f => {
+      const rel = f.startsWith(this.workDir) ? f.slice(this.workDir.length + 1) : f;
+      const st = statSync(f);
+      const size = st.size > 1024 * 1024
+        ? `${(st.size / 1024 / 1024).toFixed(1)} MB`
+        : st.size > 1024
+          ? `${(st.size / 1024).toFixed(1)} KB`
+          : `${st.size} B`;
+      return `<tr><td>${rel}</td><td>${size}</td></tr>`;
+    }).join('\n');
+
+    // Iteration summary rows
+    const iterRows = this.state.iterations.map(iter => {
+      const taskCount = iter.tasks.length;
+      const completed = iter.tasks.filter(t => t.status === 'completed').length;
+      const failed = iter.tasks.filter(t => t.status === 'failed').length;
+      return `<tr>
+        <td>${iter.number}</td>
+        <td>${completed}/${taskCount} 完成${failed > 0 ? `，${failed} 失败` : ''}</td>
+        <td>${iter.completedAt ? new Date(iter.completedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '进行中'}</td>
+      </tr>`;
+    }).join('\n');
+
+    return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${this.project.title} — DeepForge Report</title>
+<style>
+  :root { --bg: #fafaf9; --fg: #1c1917; --accent: #d97706; --border: #e7e5e4; --card: #fff; --muted: #78716c; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif; background: var(--bg); color: var(--fg); line-height: 1.6; }
+  .container { max-width: 900px; margin: 0 auto; padding: 3rem 2rem; }
+  header { border-bottom: 1px solid var(--border); padding-bottom: 2rem; margin-bottom: 2rem; }
+  header h1 { font-size: 1.75rem; font-weight: 600; letter-spacing: -0.02em; }
+  header .meta { color: var(--muted); font-size: 0.875rem; margin-top: 0.5rem; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 2.5rem; }
+  .stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; }
+  .stat-card .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+  .stat-card .value { font-size: 1.5rem; font-weight: 600; margin-top: 0.25rem; }
+  section { margin-bottom: 2.5rem; }
+  section h2 { font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+  th, td { text-align: left; padding: 0.625rem 0.75rem; border-bottom: 1px solid var(--border); }
+  th { font-weight: 500; color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  .index-block { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.25rem; font-size: 0.875rem; white-space: pre-wrap; font-family: 'SF Mono', 'Fira Code', monospace; }
+  footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.75rem; text-align: center; }
+  footer a { color: var(--accent); text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>${this.project.title}</h1>
+    <div class="meta">${this.project.description}</div>
+    <div class="meta">生成于 ${now} · DeepForge Multi-Agent Framework</div>
+  </header>
+
+  <div class="stats">
+    <div class="stat-card"><div class="label">迭代轮次</div><div class="value">${iterCount}</div></div>
+    <div class="stat-card"><div class="label">总耗时</div><div class="value">${hours}h ${mins}m</div></div>
+    <div class="stat-card"><div class="label">团队规模</div><div class="value">${this.project.roles.length + 3} 角色</div></div>
+    <div class="stat-card"><div class="label">产出文件</div><div class="value">${files.length} 个</div></div>
+  </div>
+
+  <section>
+    <h2>迭代历程</h2>
+    <table>
+      <thead><tr><th>轮次</th><th>任务</th><th>完成时间</th></tr></thead>
+      <tbody>${iterRows}</tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>产出索引</h2>
+    <div class="index-block">${indexContent || '暂无索引'}</div>
+  </section>
+
+  <section>
+    <h2>产出文件清单</h2>
+    <table>
+      <thead><tr><th>路径</th><th>大小</th></tr></thead>
+      <tbody>${fileRows || '<tr><td colspan="2">暂无文件</td></tr>'}</tbody>
+    </table>
+  </section>
+
+  <footer>
+    Powered by <a href="#">DeepForge</a> · Multi-Agent Orchestration Framework
+  </footer>
+</div>
+</body>
+</html>`;
   }
 
   // ========== Helpers ==========
@@ -474,6 +784,23 @@ export class ForgeEngine {
   private emit(type: ForgeEvent['type'], message: string, role?: string, taskId?: string): void {
     this.log(message);
     this.onEvent?.({ type, message, role, taskId, timestamp: new Date().toISOString() });
+  }
+
+  /** Hot-reload mutable config fields (e.g. maxConcurrent changed via GUI) */
+  private reloadConfig(): void {
+    for (const cfgName of ['deepforge.json', 'forge-project.json']) {
+      const cfgPath = join(this.workDir, cfgName);
+      if (existsSync(cfgPath)) {
+        try {
+          const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8'));
+          if (cfg.maxConcurrent && cfg.maxConcurrent !== this.project.maxConcurrent) {
+            this.log(`maxConcurrent changed: ${this.project.maxConcurrent} → ${cfg.maxConcurrent}`);
+            this.project.maxConcurrent = cfg.maxConcurrent;
+          }
+        } catch { /* ignore */ }
+        break;
+      }
+    }
   }
 
   private getEnv(): Record<string, string> {
@@ -526,6 +853,46 @@ export class ForgeEngine {
       }
     }
     return broken;
+  }
+
+  /** Report task error: write to feedback.md + create Feishu notification */
+  private reportTaskError(task: ForgeTask, error?: string): void {
+    const errMsg = error || '未知错误';
+    this.log(`❌ 任务失败 [${task.id}]: ${errMsg}`);
+
+    // 1. Write to feedback.md so Leader sees the error
+    appendFileSync(join(this.workDir, 'feedback.md'),
+      `\n\n# ❌ 任务执行失败 — ${task.id}\n\n` +
+      `- **角色**: ${task.role}\n` +
+      `- **描述**: ${task.description}\n` +
+      `- **错误**: ${errMsg}\n` +
+      `- **耗时**: ${task.durationMs || 0}ms\n` +
+      `- **时间**: ${new Date().toISOString()}\n\n` +
+      `Leader 请注意此失败并在下轮规划中处理。\n`);
+
+    // 2. Create notification for Feishu delivery
+    const nId = `err-${task.id}-${Date.now()}`;
+    const notification: ForgeNotification = {
+      id: nId,
+      from: task.role,
+      type: 'info',
+      title: `任务失败: ${task.id}`,
+      detail: `角色 ${task.role} 执行失败\n描述: ${task.description}\n错误: ${errMsg}`,
+      blocking: false,
+      createdAt: new Date().toISOString(),
+    };
+    writeFileSync(
+      join(this.workDir, 'notifications', 'pending', `${nId}.json`),
+      JSON.stringify(notification, null, 2),
+    );
+  }
+
+  private fmtDuration(ms: number): string {
+    const s = Math.round(ms / 1000);
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    const rem = s % 60;
+    return rem > 0 ? `${m}m${rem}s` : `${m}m`;
   }
 
   private sleep(ms: number): Promise<void> {

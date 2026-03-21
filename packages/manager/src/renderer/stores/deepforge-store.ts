@@ -10,7 +10,9 @@ export interface DeepForgeProject {
   totalTokens: number;
   isRunning: boolean;
   source: string;
-  tasks: { role: string; status: string; description?: string; error?: string; output?: string; startedAt?: string }[];
+  maxConcurrent: number;
+  createdAt?: string;
+  tasks: { id?: string; role: string; status: string; description?: string; error?: string; output?: string; startedAt?: string }[];
 }
 
 interface DeepForgeStore {
@@ -29,6 +31,7 @@ interface DeepForgeStore {
   selectProject: (id: string | null) => void;
   fetchDetail: (id: string) => Promise<void>;
   fetchLogs: (id: string) => Promise<void>;
+  pollDetail: () => void;
 }
 
 export const useDeepForgeStore = create<DeepForgeStore>((set, get) => ({
@@ -54,6 +57,15 @@ export const useDeepForgeStore = create<DeepForgeStore>((set, get) => ({
 
   selectProject: (id) => {
     set({ selectedProject: id, detailState: null, detailLogs: [] });
+    if (id) {
+      get().fetchDetail(id);
+      get().fetchLogs(id);
+    }
+  },
+
+  // Called by detail page polling to keep iterations/tasks in sync
+  pollDetail: () => {
+    const id = get().selectedProject;
     if (id) {
       get().fetchDetail(id);
       get().fetchLogs(id);

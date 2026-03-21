@@ -61,6 +61,17 @@ const api = {
       ipcRenderer.invoke('deepforge:delete', projectId),
     inject: (projectId: string, message: string): Promise<void> =>
       ipcRenderer.invoke('deepforge:inject', projectId, message),
+    package: (projectId: string): Promise<{ path: string }> =>
+      ipcRenderer.invoke('deepforge:package', projectId),
+    onPackageProgress: (callback: (data: { projectId: string; step: string }) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: any) => callback(data);
+      ipcRenderer.on('deepforge:package-progress', handler);
+      return () => { ipcRenderer.removeListener('deepforge:package-progress', handler); };
+    },
+    setConfig: (projectId: string, key: string, value: any): Promise<void> =>
+      ipcRenderer.invoke('deepforge:set-config', projectId, key, value),
+    attach: (projectId: string, taskId: string): Promise<void> =>
+      ipcRenderer.invoke('deepforge:attach', projectId, taskId),
   },
   claude: {
     check: (): Promise<{ installed: boolean; version?: string; path?: string }> =>

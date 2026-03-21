@@ -286,6 +286,7 @@ export function registerIPCHandlers(
         let totalIterations = 0;
         let totalCostUsd = 0;
         let totalTokens = 0;
+        let createdAt = '';
         const tasks: { role: string; status: string; description?: string; error?: string; output?: string; startedAt?: string }[] = [];
 
         if (existsSync(statePath)) {
@@ -294,6 +295,7 @@ export function registerIPCHandlers(
             phase = stateData.phase || 'unknown';
             currentIteration = stateData.currentIteration || 0;
             totalIterations = Array.isArray(stateData.iterations) ? stateData.iterations.length : 0;
+            createdAt = stateData.createdAt || '';
             // Handle both flat totalCostUsd and nested totalCost.totalCostUsd
             const tc = stateData.totalCost;
             if (tc && typeof tc === 'object') {
@@ -309,6 +311,7 @@ export function registerIPCHandlers(
               if (Array.isArray(latestIter.tasks)) {
                 for (const task of latestIter.tasks) {
                   tasks.push({
+                    id: task.id,
                     role: task.role || 'unknown',
                     status: task.status || 'unknown',
                     description: task.description,
@@ -323,14 +326,16 @@ export function registerIPCHandlers(
           } catch { /* ignore parse errors */ }
         }
 
-        // Read project config for title
+        // Read project config for title and settings
         let title = id;
+        let maxConcurrent = 5;
         for (const cfgName of ['forge-project.json', 'deepforge.json']) {
           const cfgPath = join(projectDir, cfgName);
           if (existsSync(cfgPath)) {
             try {
               const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8'));
               if (cfg.title) title = cfg.title;
+              if (cfg.maxConcurrent) maxConcurrent = cfg.maxConcurrent;
             } catch { /* ignore */ }
             break;
           }
@@ -357,8 +362,10 @@ export function registerIPCHandlers(
           totalIterations,
           totalCostUsd,
           totalTokens,
+          createdAt,
           isRunning,
           source: baseDir.includes('.deepforge') ? 'deepforge' : 'forge',
+          maxConcurrent,
           tasks,
         });
       }
@@ -411,6 +418,28 @@ export function registerIPCHandlers(
     return [];
   });
 
+  ipcMain.handle('deepforge:attach', async (_event, projectId: string, taskId: string) => {
+    const projectDir = findProjectDir(projectId);
+    if (!projectDir) throw new Error(`Project not found: ${projectId}`);
+
+    const logPath = join(projectDir, 'task-logs', `${taskId}.log`);
+    const { execSync } = require('node:child_process');
+
+    // Open Terminal.app with tail -f on the task log
+    const script = `
+      tell application "Terminal"
+        activate
+        do script "echo '🔍 DeepForge — ${taskId}' && tail -f '${logPath}'"
+      end tell
+    `;
+    try {
+      execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, { timeout: 5000 });
+    } catch {
+      // Fallback: just open the log file
+      shell.openPath(logPath);
+    }
+  });
+
   ipcMain.handle('deepforge:reveal', async (_event, projectId: string) => {
     for (const baseDir of DEEPFORGE_DIRS) {
       const dir = join(baseDir, projectId);
@@ -437,14 +466,22 @@ export function registerIPCHandlers(
     return null;
   }
 
-  // Helper: kill process by PID from forge.pid
+  // Helper: kill process and all children by PID from forge.pid
   function killProjectProcess(projectDir: string): boolean {
     const pidPath = join(projectDir, 'forge.pid');
     if (!existsSync(pidPath)) return false;
     try {
       const pid = parseInt(readFileSync(pidPath, 'utf-8').trim(), 10);
       if (pid > 0) {
-        process.kill(pid, 'SIGTERM');
+        // Kill entire process tree (main process + all CC child processes)
+        try {
+          const { execSync } = require('node:child_process');
+          // pkill -P kills all children first
+          execSync(`pkill -TERM -P ${pid} 2>/dev/null; kill -TERM ${pid} 2>/dev/null`, { timeout: 5000 });
+        } catch {
+          // Fallback: just kill the main process
+          try { process.kill(pid, 'SIGTERM'); } catch { /* already dead */ }
+        }
         // Clean up pid file
         try { unlinkSync(pidPath); } catch { /* ignore */ }
         return true;
@@ -520,25 +557,30 @@ export function registerIPCHandlers(
     if (existsSync(statePath)) {
       try {
         const stateData = JSON.parse(readFileSync(statePath, 'utf-8'));
-        stateData.phase = 'running';
+        stateData.phase = 'planning';
         writeFileSync(statePath, JSON.stringify(stateData, null, 2), 'utf-8');
       } catch { /* ignore */ }
     }
   });
 
   ipcMain.handle('deepforge:delete', async (_event, projectId: string) => {
-    const projectDir = findProjectDir(projectId);
-    if (!projectDir) throw new Error(`DeepForge project not found: ${projectId}`);
-
-    // Kill process first if still running
-    killProjectProcess(projectDir);
-
-    // Delete the entire project directory
-    try {
-      rmSync(projectDir, { recursive: true, force: true });
-    } catch (err) {
-      throw new Error(`Failed to delete project directory: ${(err as Error).message}`);
+    // Delete from ALL possible locations (prevent ghost reappearance)
+    let found = false;
+    for (const baseDir of DEEPFORGE_DIRS) {
+      const dir = join(baseDir, projectId);
+      if (existsSync(dir)) {
+        // Kill process first
+        killProjectProcess(dir);
+        // Delete directory
+        try {
+          rmSync(dir, { recursive: true, force: true });
+          found = true;
+        } catch (err) {
+          throw new Error(`Failed to delete ${dir}: ${(err as Error).message}`);
+        }
+      }
     }
+    if (!found) throw new Error(`DeepForge project not found: ${projectId}`);
   });
 
   ipcMain.handle('deepforge:inject', async (_event, projectId: string, message: string) => {
@@ -547,6 +589,113 @@ export function registerIPCHandlers(
     const { appendFileSync } = require('node:fs');
     const fbPath = join(projectDir, 'feedback.md');
     appendFileSync(fbPath, `\n\n# 用户反馈 — ${new Date().toISOString()}\n${message}\n`);
+  });
+
+  ipcMain.handle('deepforge:set-config', async (_event, projectId: string, key: string, value: any) => {
+    const projectDir = findProjectDir(projectId);
+    if (!projectDir) throw new Error(`DeepForge project not found: ${projectId}`);
+
+    // Update deepforge.json config
+    for (const cfgName of ['deepforge.json', 'forge-project.json']) {
+      const cfgPath = join(projectDir, cfgName);
+      if (existsSync(cfgPath)) {
+        const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8'));
+        cfg[key] = value;
+        writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf-8');
+        return;
+      }
+    }
+    throw new Error('Config file not found');
+  });
+
+  ipcMain.handle('deepforge:package', async (event, projectId: string) => {
+    const projectDir = findProjectDir(projectId);
+    if (!projectDir) throw new Error(`DeepForge project not found: ${projectId}`);
+
+    const sender = event.sender;
+    const send = (step: string) => {
+      try { sender.send('deepforge:package-progress', { projectId, step }); } catch {}
+    };
+
+    // Find claude binary
+    const claudePaths = [
+      join(homedir(), '.mlb', 'bin', 'claude'),
+      '/usr/local/bin/claude',
+    ];
+    let claudeBin: string | null = null;
+    for (const p of claudePaths) {
+      if (existsSync(p)) { claudeBin = p; break; }
+    }
+
+    if (!claudeBin) throw new Error('Claude CLI not found');
+
+    send('正在启动整理员 Agent...');
+
+    const templatePath = join(homedir(), '.deepforge', 'report-template.html');
+    const hasTemplate = existsSync(templatePath);
+
+    const prompt = `你是产出整理员。当前工作目录已经是项目目录。请：
+1. 读取当前目录结构，区分产物（artifacts/、reports/ 下的文件）和过程文件（forge-state.json、task-logs/、iterations/、notifications/、feedback.md 等）
+2. 将产物复制到 deliverables/ 目录，按类别整理（不要遗漏任何有价值的产出）
+3. 在 deliverables/ 生成 report.html：
+   ${hasTemplate ? `- 读取 ${templatePath} 作为设计模板，使用其中的 CSS 变量、颜色体系、组件样式` : '- 使用简约专业的暗色风格'}
+   - 中文内容
+   - 包含：项目概述、产出清单（文件名+相对路径+说明）、研究/工作总结、迭代历程
+   - 所有产出文件列表要有相对路径方便查找
+   - 风格要求：干净克制，无花哨渐变，无 AI 风格的彩色装饰
+4. 打包：cd deliverables && zip -r "../${projectId}-deliverables.zip" .
+5. 不要删除任何原始文件
+6. 每完成一步，输出一行进度，格式：[进度] 步骤描述`;
+
+    // Spawn CC with streaming output
+    const { spawn: sp } = require('node:child_process');
+    const child = sp(claudeBin, [
+      '--print', prompt,
+      '--permission-mode', 'bypassPermissions',
+    ], {
+      cwd: projectDir,
+      timeout: 10 * 60 * 1000,
+      env: { ...process.env, HOME: homedir() },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let output = '';
+    child.stdout?.on('data', (chunk: Buffer) => {
+      const text = chunk.toString();
+      output += text;
+      // Extract progress lines
+      const lines = text.split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed) send(trimmed.slice(0, 200));
+      }
+    });
+
+    child.stderr?.on('data', (chunk: Buffer) => {
+      const text = chunk.toString().trim();
+      if (text) send(`⚠️ ${text.slice(0, 200)}`);
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      child.on('close', (code: number) => {
+        if (code === 0) resolve();
+        else reject(new Error(`CC exited with code ${code}`));
+      });
+      child.on('error', reject);
+    });
+
+    send('✅ 整理完成');
+
+    const zipPath = join(projectDir, `${projectId}-deliverables.zip`);
+    const deliverDir = join(projectDir, 'deliverables');
+    const resultPath = existsSync(zipPath) ? zipPath : existsSync(deliverDir) ? deliverDir : projectDir;
+
+    // Show in Finder
+    shell.showItemInFolder(resultPath);
+
+    send(`📁 产出目录: ${resultPath}`);
+
+    return { path: resultPath };
   });
 
   // --- System ---

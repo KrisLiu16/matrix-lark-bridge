@@ -85,16 +85,26 @@ switch (command) {
       ],
       "model":        "模型名（默认 opus[1m]）",
       "effort":       "推理力度（默认 max）",
-      "maxConcurrent": 5
+      "maxConcurrent": 5,
+      "noCritic":      false,
+      "noVerifier":    false
     }
 
+  环境变量:
+    DEEPFORGE_MODEL           模型名（默认 opus[1m]）
+    DEEPFORGE_EFFORT          推理力度（默认 max）
+    DEEPFORGE_MAX_CONCURRENT  最大并发 CC 数（默认 5）
+
   框架自动包含 3 个强制角色（不需要配置）:
-    - Leader:   每轮规划任务和总结
-    - Critic:   每轮找问题、给负反馈
-    - Verifier: 核查产出真实性
+    - Leader:   每轮规划任务和总结（15 分钟超时）
+    - Critic:   每轮找问题、给负反馈（15 分钟超时）
+    - Verifier: 核查产出真实性（15 分钟超时）
+    - Packager: 项目完成时自动整理产出（15 分钟超时）
+
+  动态角色（用户定义）超时 30 分钟。
 
   示例:
-    deepforge start --config ~/.forge/projects/my-research/forge-project.json
+    deepforge start --config ~/.deepforge/projects/my-research/deepforge.json
 `);
       process.exit(0);
     }
@@ -124,7 +134,7 @@ switch (command) {
 
     project.model = project.model || process.env.DEEPFORGE_MODEL || 'opus[1m]';
     project.effort = project.effort || process.env.DEEPFORGE_EFFORT || 'max';
-    project.maxConcurrent = project.maxConcurrent || 5;
+    project.maxConcurrent = project.maxConcurrent || parseInt(process.env.DEEPFORGE_MAX_CONCURRENT || '5', 10);
 
     console.log(`
 ╔══════════════════════════════════════════════════╗
@@ -135,7 +145,10 @@ switch (command) {
 `);
 
     const engine = new ForgeEngine(project, {
-      log: (msg) => console.log(`[forge] ${msg}`),
+      log: (msg) => {
+        const t = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+        console.log(`[${t}] [forge] ${msg}`);
+      },
       onNotify: (n) => {
         console.log(`[NOTIFY] ${n.from}: ${n.title} — ${n.detail}`);
       },
@@ -172,7 +185,7 @@ switch (command) {
       const statePath = join(baseDir, d, 'forge-state.json');
       if (existsSync(statePath)) {
         const state = JSON.parse(readFileSync(statePath, 'utf-8'));
-        console.log(`  ${d.padEnd(30)} phase:${state.phase.padEnd(12)} iter:${state.currentIteration} cost:$${state.totalCostUsd.toFixed(2)}`);
+        console.log(`  ${d.padEnd(30)} phase:${state.phase.padEnd(12)} iter:${state.currentIteration}`);
       }
     }
     break;

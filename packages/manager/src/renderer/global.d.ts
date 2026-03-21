@@ -37,15 +37,18 @@ interface MlbAPI {
   deepforge: {
     list(): Promise<{
       id: string; title: string; phase: string; currentIteration: number;
-      totalIterations: number; totalCostUsd: number; isRunning: boolean;
-      source: string; tasks: { role: string; status: string }[];
+      totalIterations: number; totalCostUsd: number; totalTokens: number;
+      isRunning: boolean; source: string;
+      tasks: { role: string; status: string; description?: string; error?: string; output?: string; startedAt?: string }[];
     }[]>;
     status(projectId: string): Promise<any>;
     logs(projectId: string, lines?: number): Promise<string[]>;
+    taskLog(projectId: string, taskId: string): Promise<string[]>;
     reveal(projectId: string): Promise<void>;
     stop(projectId: string): Promise<void>;
     resume(projectId: string): Promise<void>;
     delete(projectId: string): Promise<void>;
+    inject(projectId: string, message: string): Promise<void>;
   };
   system: {
     getWorkspaceRoot(): Promise<string>;

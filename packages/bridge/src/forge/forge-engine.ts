@@ -1,13 +1,14 @@
 /**
  * Forge Engine — Generic multi-agent orchestration loop.
  *
- * Flow: setup → [plan → execute(dynamic) → critic(forced) → verify(forced) → index(forced) → iterate]
- * Critic, Verifier, and Indexer are framework-enforced, cannot be skipped.
+ * Flow: setup → [plan → execute(dynamic) → critic(forced) → verify(forced) → iterate]
+ * Critic and Verifier are framework-enforced, cannot be skipped.
+ * Index validation is done automatically by the framework (validateIndex), not a separate agent.
  */
 import { writeFileSync, readFileSync, existsSync, mkdirSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { forgeRun } from './forge-runner.js';
-import { leaderPrompt, criticPrompt, verifierPrompt, indexerPrompt, dynamicRolePrompt } from './forge-roles.js';
+import { leaderPrompt, criticPrompt, verifierPrompt, dynamicRolePrompt } from './forge-roles.js';
 import { buildForgePrompt } from './forge-context.js';
 import type {
   ForgeProject, ForgeState, ForgeTask, ForgeIteration, ForgePhase, ForgeEvent,
@@ -78,9 +79,6 @@ export class ForgeEngine {
             break;
           case 'verifying':
             await this.runVerifier();
-            break;
-          case 'indexing':
-            await this.runIndexer();
             break;
           case 'iterating':
             await this.iterate();
@@ -292,34 +290,6 @@ export class ForgeEngine {
     }
 
     this.log(`Verifier: ${result.success ? '✅' : '❌'} ($${result.costUsd.toFixed(2)})`);
-    this.setPhase('indexing');
-  }
-
-  /** Indexer — FORCED, maintains index health */
-  private async runIndexer(): Promise<void> {
-    this.log('Indexer checking index...');
-    const iterNum = this.state.currentIteration;
-
-    const task: ForgeTask = {
-      id: `indexer-${iterNum}`,
-      role: 'indexer',
-      description: `检查 index.md 的完整性。验证每个条目的文件是否存在、描述是否准确、by: 标注是否完整。修复发现的问题，对无法修复的指名通知相关角色。`,
-      priority: 'high',
-      status: 'running',
-    };
-
-    const result = await forgeRun({
-      workDir: this.workDir,
-      model: this.project.model,
-      effort: this.project.effort,
-      systemPrompt: indexerPrompt(this.project),
-      userPrompt: buildForgePrompt('indexer', task, this.project, this.workDir, iterNum),
-      env: this.getEnv(),
-    });
-
-    this.addCost(result.costUsd);
-    writeFileSync(join(this.workDir, 'reports', 'indexer-report.md'), result.output || '');
-    this.log(`Indexer: ${result.success ? '✅' : '❌'} ($${result.costUsd.toFixed(2)})`);
     this.setPhase('iterating');
   }
 

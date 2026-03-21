@@ -13,7 +13,7 @@ export interface ForgeRoleConfig {
 }
 
 // Framework-enforced roles (always present, cannot be skipped)
-export const FORCED_ROLES = ['leader', 'critic', 'verifier', 'indexer'] as const;
+export const FORCED_ROLES = ['leader', 'critic', 'verifier'] as const;
 export type ForcedRole = typeof FORCED_ROLES[number];
 
 // ============ Forge Project ============
@@ -39,7 +39,6 @@ export type ForgePhase =
   | 'executing'     // Dynamic roles execute in sequence
   | 'critiquing'    // Critic reviews all output (forced)
   | 'verifying'     // Verifier checks facts (forced)
-  | 'indexing'      // Indexer maintains index health (forced)
   | 'iterating'     // Leader summarizes and decides next
   | 'paused'
   | 'completed';

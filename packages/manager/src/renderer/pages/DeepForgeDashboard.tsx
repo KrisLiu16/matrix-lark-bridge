@@ -658,8 +658,8 @@ function ProjectDetail({
                   <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
                     第 {i + 1} 次迭代
                   </span>
-                  {iter.costUsd !== undefined && (
-                    <span className="text-xs text-slate-400">{Math.round(Number(iter.costUsd) * 5000).toLocaleString()} tokens</span>
+                  {iter.tasks && (
+                    <span className="text-xs text-slate-400">{iter.tasks.length} 个任务</span>
                   )}
                 </div>
                 {Array.isArray(iter.tasks) && iter.tasks.length > 0 && (

@@ -122,8 +122,8 @@ switch (command) {
       process.exit(1);
     }
 
-    project.model = project.model || 'opus[1m]';
-    project.effort = project.effort || 'max';
+    project.model = project.model || process.env.DEEPFORGE_MODEL || 'opus[1m]';
+    project.effort = project.effort || process.env.DEEPFORGE_EFFORT || 'max';
     project.maxConcurrent = project.maxConcurrent || 5;
 
     console.log(`

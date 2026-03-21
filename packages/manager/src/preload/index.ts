@@ -40,17 +40,17 @@ const api = {
     disable: (name: string): Promise<void> => ipcRenderer.invoke('autostart:disable', name),
     status: (name: string): Promise<boolean> => ipcRenderer.invoke('autostart:status', name),
   },
-  forge: {
+  deepforge: {
     list: (): Promise<{
       id: string; title: string; phase: string; currentIteration: number;
       totalIterations: number; totalCostUsd: number; isRunning: boolean;
       source: string; tasks: { role: string; status: string }[];
-    }[]> => ipcRenderer.invoke('forge:list'),
-    status: (projectId: string): Promise<any> => ipcRenderer.invoke('forge:status', projectId),
+    }[]> => ipcRenderer.invoke('deepforge:list'),
+    status: (projectId: string): Promise<any> => ipcRenderer.invoke('deepforge:status', projectId),
     logs: (projectId: string, lines?: number): Promise<string[]> =>
-      ipcRenderer.invoke('forge:logs', projectId, lines),
+      ipcRenderer.invoke('deepforge:logs', projectId, lines),
     taskLog: (projectId: string, taskId: string): Promise<string[]> =>
-      ipcRenderer.invoke('forge:task-log', projectId, taskId),
+      ipcRenderer.invoke('deepforge:task-log', projectId, taskId),
   },
   claude: {
     check: (): Promise<{ installed: boolean; version?: string; path?: string }> =>

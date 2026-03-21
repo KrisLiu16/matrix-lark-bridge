@@ -34,7 +34,7 @@ interface MlbAPI {
     disable(name: string): Promise<void>;
     status(name: string): Promise<boolean>;
   };
-  forge: {
+  deepforge: {
     list(): Promise<{
       id: string; title: string; phase: string; currentIteration: number;
       totalIterations: number; totalCostUsd: number; isRunning: boolean;

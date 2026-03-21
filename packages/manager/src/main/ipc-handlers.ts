@@ -246,13 +246,13 @@ export function registerIPCHandlers(
     }
   });
 
-  // --- Forge projects ---
+  // --- DeepForge projects ---
 
-  const FORGE_DIRS = [
+  const DEEPFORGE_DIRS = [
     join(homedir(), '.deepforge', 'projects'),
   ];
 
-  ipcMain.handle('forge:list', async () => {
+  ipcMain.handle('deepforge:list', async () => {
     const projects: {
       id: string;
       title: string;
@@ -266,7 +266,7 @@ export function registerIPCHandlers(
       tasks: { role: string; status: string; description?: string; error?: string; output?: string; startedAt?: string }[];
     }[] = [];
 
-    for (const baseDir of FORGE_DIRS) {
+    for (const baseDir of DEEPFORGE_DIRS) {
       if (!existsSync(baseDir)) continue;
       let entries: string[];
       try { entries = readdirSync(baseDir); } catch { continue; }
@@ -365,8 +365,8 @@ export function registerIPCHandlers(
     return projects;
   });
 
-  ipcMain.handle('forge:status', async (_event, projectId: string) => {
-    for (const baseDir of FORGE_DIRS) {
+  ipcMain.handle('deepforge:status', async (_event, projectId: string) => {
+    for (const baseDir of DEEPFORGE_DIRS) {
       const statePath = join(baseDir, projectId, 'forge-state.json');
       if (existsSync(statePath)) {
         try {
@@ -376,12 +376,12 @@ export function registerIPCHandlers(
         }
       }
     }
-    throw new Error(`Forge project not found: ${projectId}`);
+    throw new Error(`DeepForge project not found: ${projectId}`);
   });
 
-  ipcMain.handle('forge:logs', async (_event, projectId: string, lineCount?: number) => {
+  ipcMain.handle('deepforge:logs', async (_event, projectId: string, lineCount?: number) => {
     const maxLines = lineCount || 50;
-    for (const baseDir of FORGE_DIRS) {
+    for (const baseDir of DEEPFORGE_DIRS) {
       const logPath = join(baseDir, projectId, 'forge.log');
       if (existsSync(logPath)) {
         try {
@@ -396,8 +396,8 @@ export function registerIPCHandlers(
     return [];
   });
 
-  ipcMain.handle('forge:task-log', async (_event, projectId: string, taskId: string) => {
-    for (const baseDir of FORGE_DIRS) {
+  ipcMain.handle('deepforge:task-log', async (_event, projectId: string, taskId: string) => {
+    for (const baseDir of DEEPFORGE_DIRS) {
       const logPath = join(baseDir, projectId, 'task-logs', `${taskId}.log`);
       if (existsSync(logPath)) {
         try {

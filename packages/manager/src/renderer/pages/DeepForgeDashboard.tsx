@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { useForgeStore, type ForgeProject } from '../stores/forge-store';
+import { useDeepForgeStore, type DeepForgeProject } from '../stores/deepforge-store';
 
 const PHASE_COLORS: Record<string, { bg: string; text: string; dot: string }> = {
   running: { bg: 'bg-emerald-50 dark:bg-emerald-900/30', text: 'text-emerald-700 dark:text-emerald-400', dot: 'bg-emerald-500' },
@@ -132,7 +132,7 @@ interface TaskStats {
   pending: number;
 }
 
-function computeTaskStats(tasks: ForgeProject['tasks']): TaskStats {
+function computeTaskStats(tasks: DeepForgeProject['tasks']): TaskStats {
   const stats: TaskStats = { total: tasks.length, completed: 0, running: 0, failed: 0, pending: 0 };
   for (const t of tasks) {
     if (t.status === 'completed') stats.completed++;
@@ -282,8 +282,8 @@ function TimelineEntry({ entry, index, total }: { entry: LogEntry; index: number
   );
 }
 
-export default function ForgeDashboard() {
-  const { projects, loading, error, fetchProjects, selectedProject, selectProject, detailState, detailLogs, detailLoading, fetchLogs } = useForgeStore();
+export default function DeepForgeDashboard() {
+  const { projects, loading, error, fetchProjects, selectedProject, selectProject, detailState, detailLogs, detailLoading, fetchLogs } = useDeepForgeStore();
 
   // Poll projects every 5 seconds
   useEffect(() => {
@@ -302,7 +302,7 @@ export default function ForgeDashboard() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M15.362 5.214A8.252 8.252 0 0 1 12 21 8.25 8.25 0 0 1 6.038 7.047 8.287 8.287 0 0 0 9 9.601a8.983 8.983 0 0 1 3.361-6.867 8.21 8.21 0 0 0 3 2.48Z" />
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 18a3.75 3.75 0 0 0 .495-7.468 5.99 5.99 0 0 0-1.925 3.547 5.975 5.975 0 0 1-2.133-1.001A3.75 3.75 0 0 0 12 18Z" />
           </svg>
-          <h1 className="text-sm font-semibold">DeepForge 控制台</h1>
+          <h1 className="text-sm font-semibold">DeepDeepForge 控制台</h1>
           <span className="text-xs text-slate-500 dark:text-slate-400">
             {projects.length} 个项目
           </span>
@@ -327,7 +327,7 @@ export default function ForgeDashboard() {
         ) : error ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-center text-slate-400 dark:text-slate-600">
-              <p className="text-sm">加载 DeepForge 项目失败</p>
+              <p className="text-sm">加载 DeepDeepForge 项目失败</p>
               <p className="text-xs mt-1">{error}</p>
             </div>
           </div>
@@ -337,7 +337,7 @@ export default function ForgeDashboard() {
               <svg className="w-12 h-12 mx-auto mb-3 opacity-30" fill="none" viewBox="0 0 24 24" strokeWidth="1" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M15.362 5.214A8.252 8.252 0 0 1 12 21 8.25 8.25 0 0 1 6.038 7.047 8.287 8.287 0 0 0 9 9.601a8.983 8.983 0 0 1 3.361-6.867 8.21 8.21 0 0 0 3 2.48Z" />
               </svg>
-              <p className="text-sm">暂无 DeepForge 项目</p>
+              <p className="text-sm">暂无 DeepDeepForge 项目</p>
               <p className="text-xs mt-1">~/.forge/projects/ 和 ~/.deepforge/projects/ 中的项目会显示在这里</p>
             </div>
           </div>
@@ -362,7 +362,7 @@ export default function ForgeDashboard() {
   );
 }
 
-function ProjectCard({ project, onClick }: { project: ForgeProject; onClick: () => void }) {
+function ProjectCard({ project, onClick }: { project: DeepForgeProject; onClick: () => void }) {
   const phaseColor = PHASE_COLORS[project.phase] || DEFAULT_PHASE_COLOR;
 
   return (
@@ -461,7 +461,7 @@ function ProjectCard({ project, onClick }: { project: ForgeProject; onClick: () 
 function ProjectDetail({
   project, detailState, detailLogs, detailLoading, onBack, onRefreshLogs,
 }: {
-  project: ForgeProject | null;
+  project: DeepForgeProject | null;
   detailState: any;
   detailLogs: string[];
   detailLoading: boolean;
@@ -656,7 +656,7 @@ function TaskCard({
   isExpanded,
   onToggle,
 }: {
-  task: ForgeProject['tasks'][number];
+  task: DeepForgeProject['tasks'][number];
   index: number;
   isExpanded: boolean;
   onToggle: () => void;

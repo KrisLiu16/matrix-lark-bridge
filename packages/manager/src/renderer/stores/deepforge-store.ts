@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export interface ForgeProject {
+export interface DeepForgeProject {
   id: string;
   title: string;
   phase: string;
@@ -12,8 +12,8 @@ export interface ForgeProject {
   tasks: { role: string; status: string; description?: string; error?: string; output?: string; startedAt?: number }[];
 }
 
-interface ForgeStore {
-  projects: ForgeProject[];
+interface DeepForgeStore {
+  projects: DeepForgeProject[];
   loading: boolean;
   error: string | null;
 
@@ -30,7 +30,7 @@ interface ForgeStore {
   fetchLogs: (id: string) => Promise<void>;
 }
 
-export const useForgeStore = create<ForgeStore>((set, get) => ({
+export const useDeepForgeStore = create<DeepForgeStore>((set, get) => ({
   projects: [],
   loading: false,
   error: null,
@@ -42,7 +42,7 @@ export const useForgeStore = create<ForgeStore>((set, get) => ({
   fetchProjects: async () => {
     try {
       set({ loading: true });
-      const projects = await window.mlb.forge.list();
+      const projects = await window.mlb.deepforge.list();
       set({ projects, error: null });
     } catch (err) {
       set({ error: (err as Error).message });
@@ -62,7 +62,7 @@ export const useForgeStore = create<ForgeStore>((set, get) => ({
   fetchDetail: async (id) => {
     try {
       set({ detailLoading: true });
-      const state = await window.mlb.forge.status(id);
+      const state = await window.mlb.deepforge.status(id);
       set({ detailState: state });
     } catch {
       set({ detailState: null });
@@ -73,7 +73,7 @@ export const useForgeStore = create<ForgeStore>((set, get) => ({
 
   fetchLogs: async (id) => {
     try {
-      const logs = await window.mlb.forge.logs(id, 50);
+      const logs = await window.mlb.deepforge.logs(id, 50);
       set({ detailLogs: logs });
     } catch {
       set({ detailLogs: [] });

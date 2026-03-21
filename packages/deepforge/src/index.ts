@@ -24,30 +24,38 @@ const { values, positionals } = parseArgs({
   allowPositionals: true,
 });
 
-if (values.help || positionals.length === 0) {
+if (positionals.length === 0 && !values.help) {
   console.log(`
-  Forge — Multi-Agent Orchestration CLI
+  Forge — 多 Agent 编排框架
 
-  Usage:
-    forge start --config <path>      Start a project from config file
-    forge list                        List all projects
-    forge status <id>                 Show project status
-    forge stop <id>                   Stop a running project
-    forge inject <id> "<message>"     Inject user feedback
-    forge --help                      Show this help
+  命令:
+    forge start     启动项目
+    forge list      查看所有项目
+    forge status    查看项目详情
+    forge stop      停止项目
+    forge inject    注入反馈
 
-  Config file format (JSON):
-    {
-      "id": "my-project",
-      "title": "Project Title",
-      "description": "What to accomplish",
-      "roles": [
-        {"name": "researcher", "label": "研究员", "description": "...", "systemPrompt": "..."}
-      ],
-      "model": "opus[1m]",
-      "effort": "max",
-      "maxConcurrent": 5
-    }
+  使用 forge <命令> --help 查看详细用法
+`);
+  process.exit(0);
+}
+
+if (values.help && positionals.length === 0) {
+  console.log(`
+  Forge — 多 Agent 编排框架
+
+  启动一个 AI 团队，自主迭代完成复杂任务。
+  每个角色是独立的 Claude Code 进程，并行执行。
+  框架强制 3 个角色：Leader（规划）、Critic（找问题）、Verifier（核查）。
+
+  命令:
+    forge start --config <path>      启动项目（从配置文件）
+    forge list                        列出所有项目
+    forge status <id>                 查看项目详情
+    forge stop <id>                   停止运行中的项目
+    forge inject <id> "<消息>"        向运行中的项目注入反馈
+
+  使用 forge <命令> --help 查看每个命令的详细参数
 `);
   process.exit(0);
 }
@@ -56,8 +64,43 @@ const command = positionals[0];
 
 switch (command) {
   case 'start': {
+    if (values.help) {
+      console.log(`
+  forge start — 启动一个 Forge 项目
+
+  用法: forge start --config <配置文件路径>
+
+  配置文件格式 (JSON):
+    {
+      "id":          "项目唯一ID",
+      "title":       "项目标题",
+      "description": "项目描述（Leader 会读到）",
+      "roles": [
+        {
+          "name":         "角色代号（英文）",
+          "label":        "角色显示名（中文）",
+          "description":  "职责描述",
+          "systemPrompt": "角色的系统提示词"
+        }
+      ],
+      "model":        "模型名（默认 opus[1m]）",
+      "effort":       "推理力度（默认 max）",
+      "maxConcurrent": 5
+    }
+
+  框架自动包含 3 个强制角色（不需要配置）:
+    - Leader:   每轮规划任务和总结
+    - Critic:   每轮找问题、给负反馈
+    - Verifier: 核查产出真实性
+
+  示例:
+    forge start --config ~/.forge/projects/my-research/forge-project.json
+`);
+      process.exit(0);
+    }
+
     if (!values.config) {
-      console.error('Error: --config <path> required');
+      console.error('错误: 需要 --config <路径>，使用 forge start --help 查看详情');
       process.exit(1);
     }
 
@@ -109,9 +152,18 @@ switch (command) {
   }
 
   case 'list': {
+    if (values.help) {
+      console.log(`
+  forge list — 列出所有 Forge 项目
+
+  扫描 ~/.forge/projects/ 和 ~/.deepforge/projects/，
+  显示每个项目的 ID、阶段、迭代轮次。
+`);
+      process.exit(0);
+    }
     const baseDir = join(process.env.HOME || '/tmp', '.forge', 'projects');
     if (!existsSync(baseDir)) {
-      console.log('No projects found.');
+      console.log('暂无项目。');
       break;
     }
     const { readdirSync } = await import('node:fs');
@@ -127,8 +179,17 @@ switch (command) {
   }
 
   case 'status': {
+    if (values.help) {
+      console.log(`
+  forge status <项目ID> — 查看项目详情
+
+  显示项目的完整状态：阶段、迭代、每轮任务列表、token 用量。
+  项目 ID 可通过 forge list 查看。
+`);
+      process.exit(0);
+    }
     const id = positionals[1];
-    if (!id) { console.error('Usage: forge status <id>'); process.exit(1); }
+    if (!id) { console.error('用法: forge status <项目ID>'); process.exit(1); }
     const statePath = join(process.env.HOME || '/tmp', '.forge', 'projects', id, 'forge-state.json');
     if (!existsSync(statePath)) { console.error(`Project not found: ${id}`); process.exit(1); }
     const state = JSON.parse(readFileSync(statePath, 'utf-8'));
@@ -137,9 +198,22 @@ switch (command) {
   }
 
   case 'inject': {
+    if (values.help) {
+      console.log(`
+  forge inject <项目ID> "<消息>" — 向运行中的项目注入反馈
+
+  消息会追加到项目的 feedback.md，Leader 下一轮迭代会读到。
+  用于中途调整方向、提出新要求、回答团队的问题。
+
+  示例:
+    forge inject my-project "论文改成中文"
+    forge inject my-project "重点对比和钉钉的差异"
+`);
+      process.exit(0);
+    }
     const id = positionals[1];
     const message = positionals.slice(2).join(' ');
-    if (!id || !message) { console.error('Usage: forge inject <id> "<message>"'); process.exit(1); }
+    if (!id || !message) { console.error('用法: forge inject <项目ID> "<消息>"'); process.exit(1); }
     const fbPath = join(process.env.HOME || '/tmp', '.forge', 'projects', id, 'feedback.md');
     appendFileSync(fbPath, `\n\n# 用户反馈 — ${new Date().toISOString()}\n${message}\n`);
     console.log(`Feedback injected into project ${id}`);
@@ -147,8 +221,16 @@ switch (command) {
   }
 
   case 'stop': {
+    if (values.help) {
+      console.log(`
+  forge stop <项目ID> — 停止项目
+
+  将项目状态标记为 paused。如果进程还在运行，需要手动 kill。
+`);
+      process.exit(0);
+    }
     const id = positionals[1];
-    if (!id) { console.error('Usage: forge stop <id>'); process.exit(1); }
+    if (!id) { console.error('用法: forge stop <项目ID>'); process.exit(1); }
     const statePath = join(process.env.HOME || '/tmp', '.forge', 'projects', id, 'forge-state.json');
     if (!existsSync(statePath)) { console.error(`Project not found: ${id}`); process.exit(1); }
     const state = JSON.parse(readFileSync(statePath, 'utf-8'));

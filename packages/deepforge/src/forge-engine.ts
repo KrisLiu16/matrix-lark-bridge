@@ -164,10 +164,16 @@ export class ForgeEngine {
     const task: ForgeTask = {
       id: `leader-plan-${iterNum}`,
       role: 'leader',
-      description: `规划第 ${iterNum} 轮迭代。读取所有成员汇报和 Critic 反馈，分配任务。`,
+      description: `规划第 ${iterNum} 轮迭代`,
       priority: 'high',
       status: 'running',
+      startedAt: new Date().toISOString(),
     };
+
+    // Add leader task to iteration so it's visible in GUI
+    const iter = this.currentIter()!;
+    iter.tasks.push(task);
+    this.persist();
 
     const result = await forgeRun({
       workDir: this.workDir,
@@ -179,15 +185,20 @@ export class ForgeEngine {
       taskId: task.id,
     });
 
+    task.status = result.success ? 'completed' : 'failed';
+    task.costUsd = result.costUsd;
+    task.durationMs = result.durationMs;
+    task.completedAt = new Date().toISOString();
+    task.error = result.error;
+
     writeFileSync(join(iterDir, 'plan.md'), result.output);
     this.addCost(result.costUsd);
 
-    // Parse tasks
-    const tasks = this.parseTasks(result.output, iterNum);
-    const iter = this.currentIter()!;
-    iter.tasks.push(...tasks);
+    // Parse tasks from leader output and add to iteration
+    const newTasks = this.parseTasks(result.output, iterNum);
+    iter.tasks.push(...newTasks);
 
-    this.log(`Planned ${tasks.length} tasks`);
+    this.log(`Planned ${newTasks.length} tasks`);
     this.setPhase('executing');
   }
 
@@ -268,10 +279,14 @@ export class ForgeEngine {
     const task: ForgeTask = {
       id: `critic-${iterNum}`,
       role: 'critic',
-      description: `严格审查第 ${iterNum} 轮所有产出。读取 reports/ 和 artifacts/，找出所有问题。将反馈写入 feedback.md。`,
+      description: `审查第 ${iterNum} 轮产出，找问题`,
       priority: 'high',
       status: 'running',
+      startedAt: new Date().toISOString(),
     };
+
+    const iter = this.currentIter();
+    if (iter) { iter.tasks.push(task); this.persist(); }
 
     const result = await forgeRun({
       workDir: this.workDir,
@@ -296,9 +311,14 @@ export class ForgeEngine {
       writeFileSync(join(this.workDir, 'reports', 'critic-report.md'), result.output);
     }
 
+    task.status = result.success ? 'completed' : 'failed';
+    task.costUsd = result.costUsd;
+    task.durationMs = result.durationMs;
+    task.completedAt = new Date().toISOString();
+    task.error = result.error;
+
     this.addCost(result.costUsd);
-    const iter = this.currentIter()!;
-    iter.criticFeedback = result.output;
+    if (iter) iter.criticFeedback = result.output;
     this.log(`Critic: ${result.success ? '✅' : '❌'} ($${result.costUsd.toFixed(2)})`);
     this.emit('critic', `Critic completed`, 'critic');
 
@@ -319,11 +339,14 @@ export class ForgeEngine {
     const task: ForgeTask = {
       id: `verifier-${iterNum}`,
       role: 'verifier',
-      description: `核查第 ${iterNum} 轮所有产出的真实性。` +
-        (broken.length > 0 ? `\n⚠️ 索引有 ${broken.length} 个断链：${broken.join(', ')}` : ''),
+      description: `核查第 ${iterNum} 轮产出真实性`,
       priority: 'high',
       status: 'running',
+      startedAt: new Date().toISOString(),
     };
+
+    const iter = this.currentIter();
+    if (iter) { iter.tasks.push(task); this.persist(); }
 
     const result = await forgeRun({
       workDir: this.workDir,
@@ -335,9 +358,14 @@ export class ForgeEngine {
       taskId: task.id,
     });
 
+    task.status = result.success ? 'completed' : 'failed';
+    task.costUsd = result.costUsd;
+    task.durationMs = result.durationMs;
+    task.completedAt = new Date().toISOString();
+    task.error = result.error;
+
     this.addCost(result.costUsd);
-    const iter = this.currentIter()!;
-    iter.verifierResult = result.output;
+    if (iter) iter.verifierResult = result.output;
     writeFileSync(join(this.workDir, 'reports', 'verifier-report.md'), result.output || '');
 
     if (result.output?.includes('❌')) {
@@ -357,10 +385,14 @@ export class ForgeEngine {
     const task: ForgeTask = {
       id: `leader-iterate-${iterNum}`,
       role: 'leader',
-      description: `总结第 ${iterNum} 轮。读取 Critic 反馈和 Verifier 报告，决定下一轮重点。写反思到 iteration-log.md。`,
+      description: `总结第 ${iterNum} 轮，规划下一步`,
       priority: 'high',
       status: 'running',
+      startedAt: new Date().toISOString(),
     };
+
+    const iter = this.currentIter();
+    if (iter) { iter.tasks.push(task); this.persist(); }
 
     const result = await forgeRun({
       workDir: this.workDir,
@@ -372,6 +404,12 @@ export class ForgeEngine {
       taskId: task.id,
     });
 
+    task.status = result.success ? 'completed' : 'failed';
+    task.costUsd = result.costUsd;
+    task.durationMs = result.durationMs;
+    task.completedAt = new Date().toISOString();
+    task.error = result.error;
+
     this.addCost(result.costUsd);
 
     // Append to iteration log
@@ -382,9 +420,10 @@ export class ForgeEngine {
     writeFileSync(join(this.workDir, 'status.md'),
       `# 状态\n\n阶段：迭代 ${iterNum} 完成\n迭代：${iterNum}\n费用：$${this.state.totalCostUsd.toFixed(2)}\n`);
 
-    const iter = this.currentIter()!;
-    iter.leaderSummary = result.output;
-    iter.completedAt = new Date().toISOString();
+    if (iter) {
+      iter.leaderSummary = result.output;
+      iter.completedAt = new Date().toISOString();
+    }
 
     this.log(`Iteration ${iterNum} complete`);
     this.state.consecutiveFailures = 0;

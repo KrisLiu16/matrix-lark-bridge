@@ -9,7 +9,7 @@ export interface ForgeProject {
   totalCostUsd: number;
   isRunning: boolean;
   source: string;
-  tasks: { role: string; status: string }[];
+  tasks: { role: string; status: string; description?: string; error?: string; output?: string; startedAt?: number }[];
 }
 
 interface ForgeStore {

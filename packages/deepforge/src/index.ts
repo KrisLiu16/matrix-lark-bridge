@@ -272,6 +272,23 @@ switch (command) {
     const statePath = join(projectDir, 'forge-state.json');
     if (!existsSync(statePath)) { console.error(`Project not found: ${id}`); process.exit(1); }
 
+    // Kill existing process if running
+    const pidPath = join(projectDir, 'forge.pid');
+    if (existsSync(pidPath)) {
+      try {
+        const oldPid = parseInt(readFileSync(pidPath, 'utf-8').trim(), 10);
+        if (oldPid > 0) {
+          try { process.kill(oldPid, 0); } catch { /* not running, skip */ }
+          try {
+            const { execSync } = await import('node:child_process');
+            execSync(`pkill -TERM -P ${oldPid} 2>/dev/null; kill -TERM ${oldPid} 2>/dev/null`, { timeout: 5000 });
+            console.log(`Killed existing process (PID ${oldPid})`);
+          } catch { /* ignore */ }
+        }
+      } catch { /* ignore */ }
+      try { const { unlinkSync } = await import('node:fs'); unlinkSync(pidPath); } catch { /* ignore */ }
+    }
+
     // Inject message if provided
     const message = positionals.slice(2).join(' ');
     if (message) {

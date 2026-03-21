@@ -88,10 +88,13 @@ export async function forgeRun(opts: ForgeRunOpts): Promise<ForgeRunResult> {
     }, opts.timeoutMs || 3600000);
 
     try {
+      // Remove ELECTRON_RUN_AS_NODE from child env — CC is not Electron
+      const childEnv = { ...process.env, ...(opts.env || {}) };
+      delete childEnv.ELECTRON_RUN_AS_NODE;
       proc = spawn(shell, ['-l', '-c', cmdLine], {
         cwd: opts.workDir,
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env, ...(opts.env || {}) },
+        env: childEnv,
         detached: true, // Create new process group so we can kill the entire tree
       });
     } catch (err) {
@@ -99,11 +102,17 @@ export async function forgeRun(opts: ForgeRunOpts): Promise<ForgeRunResult> {
       return;
     }
 
+    let stderrTail = '';
     proc.on('error', (err) => finish(false, `Process error: ${err.message}`));
-    proc.on('exit', (code) => { if (!done) finish(code === 0); });
+    proc.on('exit', (code) => {
+      if (!done) finish(code === 0, code !== 0 ? `CC exited with code ${code}${stderrTail ? ': ' + stderrTail : ''}` : undefined);
+    });
 
     if (proc.stderr) {
-      createInterface({ input: proc.stderr }).on('line', () => {});
+      createInterface({ input: proc.stderr }).on('line', (line) => {
+        // Keep last 500 chars of stderr for error reporting
+        stderrTail = (stderrTail + '\n' + line).slice(-500).trim();
+      });
     }
 
     if (proc.stdout) {

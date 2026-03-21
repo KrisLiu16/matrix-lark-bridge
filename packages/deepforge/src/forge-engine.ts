@@ -132,6 +132,9 @@ export class ForgeEngine {
         this.log(`Error: ${(err as Error).message}`);
         if (this.state.consecutiveFailures >= 3) {
           this.log('Circuit breaker — pausing');
+          this.sendFeishuSummary(this.state.currentIteration,
+            `⚠️ 项目已暂停（连续 3 次错误）\n\n错误: ${(err as Error).message}\n\n阶段: ${this.state.phase}\n迭代: ${this.state.currentIteration}`
+          ).catch(() => {});
           this.setPhase('paused');
           return;
         }

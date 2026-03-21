@@ -123,7 +123,7 @@ node "$DEEPFORGE_ENTRY" inject <id> "用户的反馈内容"
 ```bash
 node "$DEEPFORGE_ENTRY" resume <id> "新的方向说明"
 ```
-消息会立即写入 feedback.md，项目从 planning 阶段重新开始。
+resume 会自动杀掉正在运行的旧进程（如果有），将消息写入 feedback.md，重置为 planning 阶段重新开始。无论项目是运行中、已暂停还是已完成，都可以用 resume。
 
 ### 用户要看产出
 读取 artifacts/ 目录下的文件，或发送 PDF/文档给用户。

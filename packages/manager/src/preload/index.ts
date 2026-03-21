@@ -63,6 +63,8 @@ const api = {
       ipcRenderer.invoke('deepforge:inject', projectId, message),
     package: (projectId: string): Promise<{ path: string }> =>
       ipcRenderer.invoke('deepforge:package', projectId),
+    packageStop: (projectId: string): Promise<void> =>
+      ipcRenderer.invoke('deepforge:package-stop', projectId),
     onPackageProgress: (callback: (data: { projectId: string; step: string }) => void): (() => void) => {
       const handler = (_event: Electron.IpcRendererEvent, data: any) => callback(data);
       ipcRenderer.on('deepforge:package-progress', handler);

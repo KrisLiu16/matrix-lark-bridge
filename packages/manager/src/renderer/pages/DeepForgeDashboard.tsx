@@ -287,8 +287,11 @@ function TimelineEntry({ entry, index, total }: { entry: LogEntry; index: number
   );
 }
 
+const FINISHED_PHASES = new Set(['completed', 'paused']);
+
 export default function DeepForgeDashboard() {
   const { projects, loading, error, fetchProjects, selectedProject, selectProject, detailState, detailLogs, detailLoading, fetchLogs } = useDeepForgeStore();
+  const [tab, setTab] = useState<'active' | 'finished'>('active');
 
   // Poll projects every 5 seconds
   useEffect(() => {
@@ -296,6 +299,9 @@ export default function DeepForgeDashboard() {
     const interval = setInterval(fetchProjects, 5000);
     return () => clearInterval(interval);
   }, [fetchProjects]);
+
+  const activeProjects = useMemo(() => projects.filter(p => !FINISHED_PHASES.has(p.phase) || p.isRunning), [projects]);
+  const finishedProjects = useMemo(() => projects.filter(p => FINISHED_PHASES.has(p.phase) && !p.isRunning), [projects]);
 
   return (
     <div className="h-full flex flex-col animate-fade-in">
@@ -308,9 +314,30 @@ export default function DeepForgeDashboard() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 18a3.75 3.75 0 0 0 .495-7.468 5.99 5.99 0 0 0-1.925 3.547 5.975 5.975 0 0 1-2.133-1.001A3.75 3.75 0 0 0 12 18Z" />
           </svg>
           <h1 className="text-sm font-semibold">DeepForge 控制台</h1>
-          <span className="text-xs text-slate-500 dark:text-slate-400">
-            {projects.length} 个项目
-          </span>
+          {!selectedProject && (
+            <div className="flex items-center bg-slate-100 dark:bg-slate-700 rounded-lg p-0.5">
+              <button
+                onClick={() => setTab('active')}
+                className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                  tab === 'active'
+                    ? 'bg-white dark:bg-slate-600 text-slate-800 dark:text-slate-200 shadow-sm'
+                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
+                }`}
+              >
+                进行中 {activeProjects.length > 0 && <span className="ml-1 text-[10px] opacity-60">{activeProjects.length}</span>}
+              </button>
+              <button
+                onClick={() => setTab('finished')}
+                className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                  tab === 'finished'
+                    ? 'bg-white dark:bg-slate-600 text-slate-800 dark:text-slate-200 shadow-sm'
+                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
+                }`}
+              >
+                已结束 {finishedProjects.length > 0 && <span className="ml-1 text-[10px] opacity-60">{finishedProjects.length}</span>}
+              </button>
+            </div>
+          )}
         </div>
         <button
           onClick={() => fetchProjects()}
@@ -357,11 +384,22 @@ export default function DeepForgeDashboard() {
             onProjectDeleted={() => selectProject(null)}
           />
         ) : (
-          <div className="p-6 grid gap-3 grid-cols-1 lg:grid-cols-2 xl:grid-cols-3">
-            {projects.map((project) => (
-              <ProjectCard key={project.id} project={project} onClick={() => selectProject(project.id)} />
-            ))}
-          </div>
+          (() => {
+            const displayed = tab === 'active' ? activeProjects : finishedProjects;
+            return displayed.length === 0 ? (
+              <div className="flex items-center justify-center h-64">
+                <p className="text-sm text-slate-400 dark:text-slate-500">
+                  {tab === 'active' ? '没有进行中的项目' : '没有已结束的项目'}
+                </p>
+              </div>
+            ) : (
+              <div className="p-6 grid gap-3 grid-cols-1 lg:grid-cols-2 xl:grid-cols-3">
+                {displayed.map((project) => (
+                  <ProjectCard key={project.id} project={project} onClick={() => selectProject(project.id)} />
+                ))}
+              </div>
+            );
+          })()
         )}
       </div>
     </div>
@@ -538,16 +576,30 @@ function ProjectDetail({
     packageLogsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [packageLogs]);
 
-  const handlePackage = async () => {
+  const [showPackageConfirm, setShowPackageConfirm] = useState(false);
+  const packageAbortRef = useRef<AbortController | null>(null);
+
+  const handlePackage = () => {
     if (!project) return;
+    setShowPackageConfirm(true);
+  };
+
+  const handlePackageConfirm = async () => {
+    if (!project) return;
+    setShowPackageConfirm(false);
     setPackageLogs([]);
     setShowPackageModal(true);
     setActionLoading('package');
+    packageAbortRef.current = new AbortController();
     try {
       const result = await window.mlb.deepforge.package(project.id);
       setPackageLogs(prev => [...prev, `✅ 完成！产出路径: ${result.path}`]);
     } catch (err) {
-      setPackageLogs(prev => [...prev, `❌ 失败: ${(err as Error).message}`]);
+      if (packageAbortRef.current?.signal.aborted) {
+        setPackageLogs(prev => [...prev, `⏹ 已停止`]);
+      } else {
+        setPackageLogs(prev => [...prev, `❌ 失败: ${(err as Error).message}`]);
+      }
     } finally {
       setActionLoading(null);
     }
@@ -899,6 +951,34 @@ function ProjectDetail({
         </div>
       )}
 
+      {/* Package confirm modal */}
+      {showPackageConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-[400px] border border-slate-200 dark:border-slate-700">
+            <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-700">
+              <span className="text-base font-semibold text-slate-800 dark:text-slate-200">整理产出</span>
+            </div>
+            <div className="p-5">
+              <p className="text-sm text-slate-600 dark:text-slate-400">将启动 Agent 整理产出并生成报告，打包为 zip。</p>
+            </div>
+            <div className="px-5 py-3 border-t border-slate-200 dark:border-slate-700 flex justify-end gap-2">
+              <button
+                onClick={() => setShowPackageConfirm(false)}
+                className="text-xs px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={handlePackageConfirm}
+                className="text-xs px-4 py-1.5 rounded-lg bg-purple-600 text-white hover:bg-purple-700 transition-colors"
+              >
+                开始整理
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Package progress modal */}
       {showPackageModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -937,16 +1017,28 @@ function ProjectDetail({
               )}
               <div ref={packageLogsEndRef} />
             </div>
-            {actionLoading !== 'package' && (
-              <div className="px-5 py-3 border-t border-slate-200 dark:border-slate-700 flex justify-end">
+            <div className="px-5 py-3 border-t border-slate-200 dark:border-slate-700 flex justify-end gap-2">
+              {actionLoading === 'package' && project && (
+                <button
+                  onClick={async () => {
+                    packageAbortRef.current?.abort();
+                    await window.mlb.deepforge.packageStop(project.id);
+                    setActionLoading(null);
+                  }}
+                  className="text-xs px-3 py-1.5 rounded-lg bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/50 transition-colors"
+                >
+                  停止
+                </button>
+              )}
+              {actionLoading !== 'package' && (
                 <button
                   onClick={() => setShowPackageModal(false)}
                   className="text-xs px-4 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
                 >
                   关闭
                 </button>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </div>
       )}

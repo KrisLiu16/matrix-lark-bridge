@@ -532,6 +532,9 @@ export function registerIPCHandlers(
     // Dev: relative to __dirname (packages/manager/dist/main/ → packages/deepforge/dist/)
     const fromDirname = join(__dirname, '../../deepforge/dist/index.js');
     if (existsSync(fromDirname)) return fromDirname;
+    // Dev: relative to app path (electron-vite dev sets app path to manager root)
+    const fromAppPath = join(elApp.getAppPath(), '../deepforge/dist/index.js');
+    if (existsSync(fromAppPath)) return fromAppPath;
     // Dev: from cwd (monorepo root)
     const fromCwd = join(process.cwd(), 'packages/deepforge/dist/index.js');
     if (existsSync(fromCwd)) return fromCwd;
@@ -543,21 +546,17 @@ export function registerIPCHandlers(
     const projectDir = findProjectDir(projectId);
     if (!projectDir) throw new Error(`DeepForge project not found: ${projectId}`);
 
+    // Kill existing process first to prevent double-engine
+    killProjectProcess(projectDir);
+
     const deepforgeEntry = findDeepforgeEntry();
 
-    // Read project config to get the config file
-    let configFile: string | null = null;
-    for (const cfgName of ['forge-project.json', 'deepforge.json']) {
-      const cfgPath = join(projectDir, cfgName);
-      if (existsSync(cfgPath)) { configFile = cfgPath; break; }
-    }
-
-    // Start deepforge in background using Electron as Node
-    const cfgArg = configFile || join(projectDir, 'deepforge.json');
+    // Start deepforge resume in background using Electron as Node
+    // resume command handles: kill old process, inject message (if any), reset phase, start engine
     const logPath = join(projectDir, 'forge.log');
     const logFd = openSync(logPath, 'a');
     const { spawn: spawnChild } = require('node:child_process');
-    const child = spawnChild(process.execPath, [deepforgeEntry, 'start', '--config', cfgArg], {
+    const child = spawnChild(process.execPath, [deepforgeEntry, 'resume', projectId], {
       cwd: projectDir,
       detached: true,
       stdio: ['ignore', logFd, logFd],
@@ -571,7 +570,7 @@ export function registerIPCHandlers(
       writeFileSync(join(projectDir, 'forge.pid'), String(child.pid));
     }
 
-    // Update state to running
+    // Update state immediately so GUI reflects the change before CLI starts
     const statePath = join(projectDir, 'forge-state.json');
     if (existsSync(statePath)) {
       try {
@@ -627,6 +626,20 @@ export function registerIPCHandlers(
     throw new Error('Config file not found');
   });
 
+  // Track active package processes for stop support
+  const activePackageProcs = new Map<string, ReturnType<typeof import('node:child_process').spawn>>();
+
+  ipcMain.handle('deepforge:package-stop', async (_event, projectId: string) => {
+    const proc = activePackageProcs.get(projectId);
+    if (proc?.pid) {
+      try { process.kill(-proc.pid, 'SIGTERM'); } catch { /* ignore */ }
+      setTimeout(() => {
+        try { process.kill(-proc.pid, 'SIGKILL'); } catch { /* already dead */ }
+      }, 3000);
+      activePackageProcs.delete(projectId);
+    }
+  });
+
   ipcMain.handle('deepforge:package', async (event, projectId: string) => {
     const projectDir = findProjectDir(projectId);
     if (!projectDir) throw new Error(`DeepForge project not found: ${projectId}`);
@@ -675,7 +688,9 @@ export function registerIPCHandlers(
       timeout: 10 * 60 * 1000,
       env: { ...process.env, HOME: homedir() },
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
     });
+    activePackageProcs.set(projectId, child);
 
     let output = '';
     child.stdout?.on('data', (chunk: Buffer) => {
@@ -696,10 +711,11 @@ export function registerIPCHandlers(
 
     await new Promise<void>((resolve, reject) => {
       child.on('close', (code: number) => {
+        activePackageProcs.delete(projectId);
         if (code === 0) resolve();
         else reject(new Error(`CC exited with code ${code}`));
       });
-      child.on('error', reject);
+      child.on('error', (err) => { activePackageProcs.delete(projectId); reject(err); });
     });
 
     send('✅ 整理完成');

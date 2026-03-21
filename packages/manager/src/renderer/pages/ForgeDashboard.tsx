@@ -276,7 +276,7 @@ function ProjectDetail({
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
         <StatCard label="阶段" value={PHASE_LABELS[project.phase] || project.phase} />
         <StatCard label="迭代" value={`${project.currentIteration}/${project.totalIterations || '?'}`} />
-        <StatCard label="费用" value={`${(p.totalInputTokens||0)+(p.totalOutputTokens||0)} tokens`} />
+        <StatCard label="Tokens" value={`${(project.totalTokens || 0).toLocaleString()}`} />
         <StatCard label="来源" value={project.source} />
       </div>
 

@@ -249,7 +249,6 @@ export function registerIPCHandlers(
   // --- Forge projects ---
 
   const FORGE_DIRS = [
-    join(homedir(), '.forge', 'projects'),
     join(homedir(), '.deepforge', 'projects'),
   ];
 

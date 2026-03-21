@@ -35,7 +35,7 @@ export class ForgeEngine {
     },
   ) {
     this.project = project;
-    this.workDir = join(process.env.HOME || '/tmp', '.forge', 'projects', project.id);
+    this.workDir = join(process.env.HOME || '/tmp', '.deepforge', 'projects', project.id);
     this.statePath = join(this.workDir, 'forge-state.json');
     this.log = opts?.log || ((m) => console.log(`[forge:${project.id}] ${m}`));
     this.onEvent = opts?.onEvent;

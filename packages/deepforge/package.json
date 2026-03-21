@@ -1,9 +1,9 @@
 {
-  "name": "@mlb/forge",
+  "name": "@mlb/deepforge",
   "version": "1.0.0",
   "type": "module",
   "bin": {
-    "forge": "./dist/index.js"
+    "deepforge": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc",

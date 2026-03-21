@@ -3,11 +3,11 @@
  * Forge CLI — Standalone multi-agent orchestration tool.
  *
  * Usage:
- *   forge start --config <path>     Start a new project
- *   forge list                       List running projects
- *   forge status <id>                Show project status
- *   forge stop <id>                  Stop a project
- *   forge inject <id> <message>      Inject feedback into a running project
+ *   deepforge start --config <path>     Start a new project
+ *   deepforge list                       List running projects
+ *   deepforge status <id>                Show project status
+ *   deepforge stop <id>                  Stop a project
+ *   deepforge inject <id> <message>      Inject feedback into a running project
  */
 import { parseArgs } from 'node:util';
 import { resolve, join } from 'node:path';
@@ -26,36 +26,36 @@ const { values, positionals } = parseArgs({
 
 if (positionals.length === 0 && !values.help) {
   console.log(`
-  Forge — 多 Agent 编排框架
+  DeepForge — 多 Agent 编排框架
 
   命令:
-    forge start     启动项目
-    forge list      查看所有项目
-    forge status    查看项目详情
-    forge stop      停止项目
-    forge inject    注入反馈
+    deepforge start     启动项目
+    deepforge list      查看所有项目
+    deepforge status    查看项目详情
+    deepforge stop      停止项目
+    deepforge inject    注入反馈
 
-  使用 forge <命令> --help 查看详细用法
+  使用 deepforge <命令> --help 查看详细用法
 `);
   process.exit(0);
 }
 
 if (values.help && positionals.length === 0) {
   console.log(`
-  Forge — 多 Agent 编排框架
+  DeepForge — 多 Agent 编排框架
 
   启动一个 AI 团队，自主迭代完成复杂任务。
   每个角色是独立的 Claude Code 进程，并行执行。
   框架强制 3 个角色：Leader（规划）、Critic（找问题）、Verifier（核查）。
 
   命令:
-    forge start --config <path>      启动项目（从配置文件）
-    forge list                        列出所有项目
-    forge status <id>                 查看项目详情
-    forge stop <id>                   停止运行中的项目
-    forge inject <id> "<消息>"        向运行中的项目注入反馈
+    deepforge start --config <path>      启动项目（从配置文件）
+    deepforge list                        列出所有项目
+    deepforge status <id>                 查看项目详情
+    deepforge stop <id>                   停止运行中的项目
+    deepforge inject <id> "<消息>"        向运行中的项目注入反馈
 
-  使用 forge <命令> --help 查看每个命令的详细参数
+  使用 deepforge <命令> --help 查看每个命令的详细参数
 `);
   process.exit(0);
 }
@@ -66,9 +66,9 @@ switch (command) {
   case 'start': {
     if (values.help) {
       console.log(`
-  forge start — 启动一个 Forge 项目
+  deepforge start — 启动一个 Forge 项目
 
-  用法: forge start --config <配置文件路径>
+  用法: deepforge start --config <配置文件路径>
 
   配置文件格式 (JSON):
     {
@@ -94,13 +94,13 @@ switch (command) {
     - Verifier: 核查产出真实性
 
   示例:
-    forge start --config ~/.forge/projects/my-research/forge-project.json
+    deepforge start --config ~/.forge/projects/my-research/forge-project.json
 `);
       process.exit(0);
     }
 
     if (!values.config) {
-      console.error('错误: 需要 --config <路径>，使用 forge start --help 查看详情');
+      console.error('错误: 需要 --config <路径>，使用 deepforge start --help 查看详情');
       process.exit(1);
     }
 
@@ -154,14 +154,14 @@ switch (command) {
   case 'list': {
     if (values.help) {
       console.log(`
-  forge list — 列出所有 Forge 项目
+  deepforge list — 列出所有 Forge 项目
 
   扫描 ~/.forge/projects/ 和 ~/.deepforge/projects/，
   显示每个项目的 ID、阶段、迭代轮次。
 `);
       process.exit(0);
     }
-    const baseDir = join(process.env.HOME || '/tmp', '.forge', 'projects');
+    const baseDir = join(process.env.HOME || '/tmp', '.deepforge', 'projects');
     if (!existsSync(baseDir)) {
       console.log('暂无项目。');
       break;
@@ -181,16 +181,16 @@ switch (command) {
   case 'status': {
     if (values.help) {
       console.log(`
-  forge status <项目ID> — 查看项目详情
+  deepforge status <项目ID> — 查看项目详情
 
   显示项目的完整状态：阶段、迭代、每轮任务列表、token 用量。
-  项目 ID 可通过 forge list 查看。
+  项目 ID 可通过 deepforge list 查看。
 `);
       process.exit(0);
     }
     const id = positionals[1];
-    if (!id) { console.error('用法: forge status <项目ID>'); process.exit(1); }
-    const statePath = join(process.env.HOME || '/tmp', '.forge', 'projects', id, 'forge-state.json');
+    if (!id) { console.error('用法: deepforge status <项目ID>'); process.exit(1); }
+    const statePath = join(process.env.HOME || '/tmp', '.deepforge', 'projects', id, 'forge-state.json');
     if (!existsSync(statePath)) { console.error(`Project not found: ${id}`); process.exit(1); }
     const state = JSON.parse(readFileSync(statePath, 'utf-8'));
     console.log(JSON.stringify(state, null, 2));
@@ -200,21 +200,21 @@ switch (command) {
   case 'inject': {
     if (values.help) {
       console.log(`
-  forge inject <项目ID> "<消息>" — 向运行中的项目注入反馈
+  deepforge inject <项目ID> "<消息>" — 向运行中的项目注入反馈
 
   消息会追加到项目的 feedback.md，Leader 下一轮迭代会读到。
   用于中途调整方向、提出新要求、回答团队的问题。
 
   示例:
-    forge inject my-project "论文改成中文"
-    forge inject my-project "重点对比和钉钉的差异"
+    deepforge inject my-project "论文改成中文"
+    deepforge inject my-project "重点对比和钉钉的差异"
 `);
       process.exit(0);
     }
     const id = positionals[1];
     const message = positionals.slice(2).join(' ');
-    if (!id || !message) { console.error('用法: forge inject <项目ID> "<消息>"'); process.exit(1); }
-    const fbPath = join(process.env.HOME || '/tmp', '.forge', 'projects', id, 'feedback.md');
+    if (!id || !message) { console.error('用法: deepforge inject <项目ID> "<消息>"'); process.exit(1); }
+    const fbPath = join(process.env.HOME || '/tmp', '.deepforge', 'projects', id, 'feedback.md');
     appendFileSync(fbPath, `\n\n# 用户反馈 — ${new Date().toISOString()}\n${message}\n`);
     console.log(`Feedback injected into project ${id}`);
     break;
@@ -223,15 +223,15 @@ switch (command) {
   case 'stop': {
     if (values.help) {
       console.log(`
-  forge stop <项目ID> — 停止项目
+  deepforge stop <项目ID> — 停止项目
 
   将项目状态标记为 paused。如果进程还在运行，需要手动 kill。
 `);
       process.exit(0);
     }
     const id = positionals[1];
-    if (!id) { console.error('用法: forge stop <项目ID>'); process.exit(1); }
-    const statePath = join(process.env.HOME || '/tmp', '.forge', 'projects', id, 'forge-state.json');
+    if (!id) { console.error('用法: deepforge stop <项目ID>'); process.exit(1); }
+    const statePath = join(process.env.HOME || '/tmp', '.deepforge', 'projects', id, 'forge-state.json');
     if (!existsSync(statePath)) { console.error(`Project not found: ${id}`); process.exit(1); }
     const state = JSON.parse(readFileSync(statePath, 'utf-8'));
     state.phase = 'paused';

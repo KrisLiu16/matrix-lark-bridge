@@ -38,10 +38,6 @@ importers:
         version: 5.9.3
 
   packages/deepforge:
-    dependencies:
-      '@mlb/shared':
-        specifier: workspace:*
-        version: link:../shared
     devDependencies:
       '@types/node':
         specifier: ^22.0.0

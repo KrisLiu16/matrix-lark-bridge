@@ -9,6 +9,7 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync, appendFileSync } fr
 import { join } from 'node:path';
 import { forgeRun } from './forge-runner.js';
 import { leaderPrompt, criticPrompt, verifierPrompt, dynamicRolePrompt } from './forge-roles.js';
+import { ForgeNotifier, type ForgeNotification } from './forge-notify.js';
 import { buildForgePrompt } from './forge-context.js';
 import type {
   ForgeProject, ForgeState, ForgeTask, ForgeIteration, ForgePhase, ForgeEvent,
@@ -22,16 +23,24 @@ export class ForgeEngine {
   private stopped = false;
   private log: (msg: string) => void;
   private onEvent?: (event: ForgeEvent) => void;
+  private onNotify?: (n: ForgeNotification) => void;
+  private notifier: ForgeNotifier;
 
   constructor(
     project: ForgeProject,
-    opts?: { log?: (msg: string) => void; onEvent?: (event: ForgeEvent) => void },
+    opts?: {
+      log?: (msg: string) => void;
+      onEvent?: (event: ForgeEvent) => void;
+      onNotify?: (n: ForgeNotification) => void;
+    },
   ) {
     this.project = project;
     this.workDir = join(process.env.HOME || '/tmp', '.forge', 'projects', project.id);
     this.statePath = join(this.workDir, 'forge-state.json');
     this.log = opts?.log || ((m) => console.log(`[forge:${project.id}] ${m}`));
     this.onEvent = opts?.onEvent;
+    this.onNotify = opts?.onNotify;
+    this.notifier = new ForgeNotifier(this.workDir);
 
     // Load or init state
     if (existsSync(this.statePath)) {
@@ -87,6 +96,10 @@ export class ForgeEngine {
           case 'completed':
             return;
         }
+
+        // Scan & send pending notifications (non-blocking)
+        this.processPendingNotifications();
+
       } catch (err) {
         this.state.consecutiveFailures++;
         this.log(`Error: ${(err as Error).message}`);
@@ -98,6 +111,12 @@ export class ForgeEngine {
         await this.sleep(30_000);
       }
     }
+  }
+
+  /** Resolve a notification from user reply (called externally) */
+  resolveNotification(id: string, reply: string): void {
+    this.notifier.resolve(id, reply);
+    this.log(`Notification ${id} resolved by user`);
   }
 
   stop(): void { this.stopped = true; }
@@ -354,8 +373,19 @@ export class ForgeEngine {
   // ========== Helpers ==========
 
   private initWorkspace(): void {
-    for (const d of ['', 'reports', 'artifacts', 'iterations']) {
+    for (const d of ['', 'reports', 'artifacts', 'iterations',
+      'notifications/pending', 'notifications/sent', 'notifications/resolved']) {
       mkdirSync(join(this.workDir, d), { recursive: true });
+    }
+  }
+
+  /** Scan pending notifications, fire callback, mark as sent */
+  private processPendingNotifications(): void {
+    const pending = this.notifier.getPending();
+    for (const n of pending) {
+      this.log(`Notification from ${n.from}: ${n.title}`);
+      this.onNotify?.(n);
+      this.notifier.markSent(n.id);
     }
   }
 

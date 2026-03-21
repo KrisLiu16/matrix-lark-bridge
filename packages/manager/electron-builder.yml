@@ -11,6 +11,10 @@ extraResources:
     to: "bridge/"
     filter:
       - "**/*"
+  - from: "deepforge-bundle/"
+    to: "deepforge/"
+    filter:
+      - "**/*"
 mac:
   category: public.app-category.developer-tools
   icon: build/icon.icns

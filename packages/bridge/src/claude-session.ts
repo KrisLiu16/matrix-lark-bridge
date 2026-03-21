@@ -6,13 +6,12 @@ import { homedir, tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import type { AgentEvent, PermissionResult, ImageAttachment, McpServerConfig } from './types.js';
 
-/** MLB-dedicated Claude Code binary path */
-const MLB_CLAUDE_PATH = join(homedir(), '.mlb', 'bin', 'claude');
+/** Claude Code binary path */
+const CLAUDE_PATH = join(homedir(), '.local', 'bin', 'claude');
 
 function findExecutable(_name: string): string {
-  if (process.env.CLAUDE_PATH) return process.env.CLAUDE_PATH;
-  if (existsSync(MLB_CLAUDE_PATH)) return MLB_CLAUDE_PATH;
-  throw new Error(`Claude Code not found at ${MLB_CLAUDE_PATH}. Please install via Manager.`);
+  if (existsSync(CLAUDE_PATH)) return CLAUDE_PATH;
+  throw new Error(`Claude Code not found at ${CLAUDE_PATH}. Please install Claude Code first.`);
 }
 
 // --- Callback interface (replaces EventEmitter) ---
@@ -384,6 +383,7 @@ export class ClaudeSession {
     const proc = this.proc;
     this.proc = null;
     this._alive = false;
+    this.pendingInputs.clear();
 
     console.log(`[claudecode] closing session, proc=${!!proc}`);
 

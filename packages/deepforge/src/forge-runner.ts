@@ -8,7 +8,7 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-const DEFAULT_CC_PATH = join(homedir(), '.mlb', 'bin', 'claude');
+const DEFAULT_CC_PATH = join(homedir(), '.local', 'bin', 'claude');
 
 export interface ForgeRunOpts {
   workDir: string;
@@ -32,7 +32,7 @@ export interface ForgeRunResult {
 
 export async function forgeRun(opts: ForgeRunOpts): Promise<ForgeRunResult> {
   const start = Date.now();
-  const claudePath = opts.claudePath || process.env.CLAUDE_PATH || DEFAULT_CC_PATH;
+  const claudePath = opts.claudePath || DEFAULT_CC_PATH;
 
   // Per-task live log
   let taskLogPath: string | null = null;
@@ -71,6 +71,13 @@ export async function forgeRun(opts: ForgeRunOpts): Promise<ForgeRunResult> {
       done = true;
       clearTimeout(timer);
       try { proc?.stdin?.end(); proc?.kill('SIGTERM'); } catch { /* ignore */ }
+      // SIGKILL fallback: force-kill if still alive after 5s
+      const ref = proc;
+      if (ref) {
+        setTimeout(() => {
+          try { ref.kill('SIGKILL'); } catch { /* already dead */ }
+        }, 5000);
+      }
       resolve({ output, costUsd, durationMs: Date.now() - start, success, error });
     };
 

@@ -1,6 +1,6 @@
 {
   "name": "@mlb/bridge",
-  "version": "0.2.0",
+  "version": "0.8.0",
   "type": "module",
   "bin": {
     "mlb-bridge": "./dist/index.js"

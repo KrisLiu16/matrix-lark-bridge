@@ -117,7 +117,7 @@ export default function App() {
             <UpdateHint />
             <button
               onClick={async () => {
-                if (!confirm('卸载内置 Claude Code？\n\n仅删除 ~/.mlb/bin/claude，不影响系统中其他 Claude Code。')) return;
+                if (!confirm('卸载 Claude Code？\n\n将删除 ~/.local/bin/claude。')) return;
                 try {
                   await window.mlb.claude.uninstall();
                   checkClaude(); // re-check → will show setup page for reinstall

@@ -6,9 +6,28 @@ import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ForgeTask, ForgeProject } from './types.js';
 
-function safe(path: string): string {
-  try { return existsSync(path) ? readFileSync(path, 'utf-8').trim() : ''; }
-  catch { return ''; }
+/** Max chars per file read to prevent context bloat */
+const MAX_FILE_CHARS = 4000;
+
+function safe(path: string, maxChars = MAX_FILE_CHARS): string {
+  try {
+    if (!existsSync(path)) return '';
+    const content = readFileSync(path, 'utf-8').trim();
+    if (content.length <= maxChars) return content;
+    return content.substring(0, maxChars) + '\n\n...(truncated, use Read tool for full content)';
+  } catch { return ''; }
+}
+
+/** Read file but only keep the last N sections (split by ## headings) */
+function safeTail(path: string, maxSections: number): string {
+  try {
+    if (!existsSync(path)) return '';
+    const content = readFileSync(path, 'utf-8').trim();
+    const sections = content.split(/(?=^## )/m);
+    if (sections.length <= maxSections) return content;
+    const kept = sections.slice(-maxSections);
+    return `...(${sections.length - maxSections} earlier sections omitted)\n\n` + kept.join('');
+  } catch { return ''; }
 }
 
 function listFiles(dir: string): string[] {
@@ -55,8 +74,9 @@ export function buildForgePrompt(
     const criticReport = safe(join(workDir, 'reports', 'critic-report.md'));
     if (criticReport) parts.push(`## Critic 汇报\n${criticReport}`);
 
-    const iterLog = safe(join(workDir, 'iteration-log.md'));
-    if (iterLog) parts.push(`## 迭代日志\n${iterLog}`);
+    // Only keep last 5 iterations to prevent context bloat
+    const iterLog = safeTail(join(workDir, 'iteration-log.md'), 5);
+    if (iterLog) parts.push(`## 迭代日志（近 5 轮）\n${iterLog}`);
   }
 
   // All roles see feedback (Critic's negative feedback + user requirements)

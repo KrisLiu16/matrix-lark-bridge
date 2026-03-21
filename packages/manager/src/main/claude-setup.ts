@@ -27,22 +27,22 @@ export interface InstallStepProgress {
 
 const TOTAL_STEPS = 4;
 
-/** MLB-dedicated install path — isolated from user's global CC */
-const MLB_BIN_DIR = join(homedir(), '.mlb', 'bin');
-const MLB_CLAUDE_PATH = join(MLB_BIN_DIR, 'claude');
+/** Claude Code install path */
+const CC_BIN_DIR = join(homedir(), '.local', 'bin');
+const CC_CLAUDE_PATH = join(CC_BIN_DIR, 'claude');
 
 export class ClaudeSetup {
   private _installing = false;
 
   /**
-   * Check if MLB-dedicated CC binary exists.
+   * Check if CC binary exists at ~/.local/bin/claude.
    * Config is injected per-process via env vars — no global settings check needed.
    */
   check(): ClaudeSetupStatus {
-    if (!existsSync(MLB_CLAUDE_PATH)) {
+    if (!existsSync(CC_CLAUDE_PATH)) {
       return { installed: false };
     }
-    return { installed: true, version: this.getVersion(MLB_CLAUDE_PATH), path: MLB_CLAUDE_PATH };
+    return { installed: true, version: this.getVersion(CC_CLAUDE_PATH), path: CC_CLAUDE_PATH };
   }
 
   async install(onProgress: (progress: InstallStepProgress) => void): Promise<ClaudeSetupStatus> {
@@ -89,10 +89,9 @@ export class ClaudeSetup {
       } else {
         emit(2, 'check', 'done', { detail: 'not found' });
 
-        // Step 3: Download CC binary directly to ~/.mlb/bin/claude
-        // Uses the same GCS source as the official install script, but installs to our own path
+        // Step 3: Download CC binary to ~/.local/bin/claude
         emit(3, 'download', 'running', { detail: 'fetching latest version...' });
-        if (!existsSync(MLB_BIN_DIR)) mkdirSync(MLB_BIN_DIR, { recursive: true });
+        if (!existsSync(CC_BIN_DIR)) mkdirSync(CC_BIN_DIR, { recursive: true });
 
         const dlOs = platform() === 'darwin' ? 'darwin' : 'linux';
         const dlCpu = arch() === 'arm64' ? 'arm64' : 'x64';
@@ -103,9 +102,9 @@ export class ClaudeSetup {
           'VERSION=$(curl -fsSL "$GCS/latest")',
           'echo "latest version: $VERSION"',
           `echo "downloading claude $VERSION for ${plat}..."`,
-          `curl -fSL "$GCS/$VERSION/${plat}/claude" -o "${MLB_CLAUDE_PATH}"`,
-          `chmod +x "${MLB_CLAUDE_PATH}"`,
-          `echo "installed to ${MLB_CLAUDE_PATH}"`,
+          `curl -fSL "$GCS/$VERSION/${plat}/claude" -o "${CC_CLAUDE_PATH}"`,
+          `chmod +x "${CC_CLAUDE_PATH}"`,
+          `echo "installed to ${CC_CLAUDE_PATH}"`,
         ].join('\n');
 
         await this.runShellWithProgress(
@@ -116,7 +115,7 @@ export class ClaudeSetup {
         emit(3, 'download', 'done', {
           config: [
             { key: 'Source', value: 'Google Cloud Storage (official)' },
-            { key: 'Target', value: MLB_CLAUDE_PATH },
+            { key: 'Target', value: CC_CLAUDE_PATH },
           ],
         });
       }
@@ -166,9 +165,9 @@ export class ClaudeSetup {
   async uninstall(): Promise<{ success: boolean; removed: string[] }> {
     const removed: string[] = [];
 
-    // Only remove MLB-dedicated binary — never touch user's global CC or ~/.claude/
-    if (existsSync(MLB_CLAUDE_PATH)) {
-      try { rmSync(MLB_CLAUDE_PATH, { force: true }); removed.push(MLB_CLAUDE_PATH); } catch {}
+    // Remove binary at ~/.local/bin/claude — never touch ~/.claude/
+    if (existsSync(CC_CLAUDE_PATH)) {
+      try { rmSync(CC_CLAUDE_PATH, { force: true }); removed.push(CC_CLAUDE_PATH); } catch {}
     }
 
     console.log(`[claude-setup] uninstalled, removed: ${removed.join(', ')}`);

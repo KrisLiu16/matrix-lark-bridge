@@ -91,6 +91,11 @@ export function registerIPCHandlers(
   // Log streaming via tail -f
   const activeLogStreams = new Map<string, () => void>();
 
+  const cleanupAllLogStreams = () => {
+    for (const [, cleanup] of activeLogStreams) cleanup();
+    activeLogStreams.clear();
+  };
+
   ipcMain.handle('bridge:logs-stream', async (_event, name: string) => {
     const validName = validateBridgeName(name);
     // Stop existing stream for this bridge
@@ -99,6 +104,11 @@ export function registerIPCHandlers(
 
     const mainWindow = getMainWindow();
     if (!mainWindow) return;
+
+    // Clean up all streams when this window's webContents is destroyed
+    if (!mainWindow.webContents.isDestroyed()) {
+      mainWindow.webContents.once('destroyed', cleanupAllLogStreams);
+    }
 
     const cleanup = processManager.tailLogs(validName, (line) => {
       try {
@@ -510,31 +520,30 @@ export function registerIPCHandlers(
     }
   });
 
+  // Find deepforge entry point (same pattern as findBridgeEntry)
+  function findDeepforgeEntry(): string {
+    const { app: elApp } = require('electron');
+    if (elApp.isPackaged) {
+      for (const name of ['index.mjs', 'index.js']) {
+        const p = join(process.resourcesPath, 'deepforge', 'dist', name);
+        if (existsSync(p)) return p;
+      }
+    }
+    // Dev: relative to __dirname (packages/manager/dist/main/ → packages/deepforge/dist/)
+    const fromDirname = join(__dirname, '../../deepforge/dist/index.js');
+    if (existsSync(fromDirname)) return fromDirname;
+    // Dev: from cwd (monorepo root)
+    const fromCwd = join(process.cwd(), 'packages/deepforge/dist/index.js');
+    if (existsSync(fromCwd)) return fromCwd;
+    try { return require.resolve('@mlb/deepforge'); } catch {}
+    throw new Error('deepforge entry point not found. Run pnpm build first.');
+  }
+
   ipcMain.handle('deepforge:resume', async (_event, projectId: string) => {
     const projectDir = findProjectDir(projectId);
     if (!projectDir) throw new Error(`DeepForge project not found: ${projectId}`);
 
-    // Find deepforge binary
-    const deepforgePaths = [
-      join(homedir(), '.mlb', 'bin', 'deepforge'),
-      join(homedir(), '.local', 'bin', 'deepforge'),
-      '/usr/local/bin/deepforge',
-      '/opt/homebrew/bin/deepforge',
-    ];
-    let deepforgeBin: string | null = null;
-    for (const p of deepforgePaths) {
-      if (existsSync(p)) { deepforgeBin = p; break; }
-    }
-    if (!deepforgeBin) {
-      // Try to find via PATH using 'which'
-      try {
-        const { execFileSync } = require('node:child_process');
-        deepforgeBin = execFileSync('which', ['deepforge'], { encoding: 'utf-8' }).trim();
-      } catch { /* not found */ }
-    }
-    if (!deepforgeBin) {
-      throw new Error('deepforge binary not found. Please ensure deepforge CLI is installed and in your PATH.');
-    }
+    const deepforgeEntry = findDeepforgeEntry();
 
     // Read project config to get the config file
     let configFile: string | null = null;
@@ -543,14 +552,24 @@ export function registerIPCHandlers(
       if (existsSync(cfgPath)) { configFile = cfgPath; break; }
     }
 
-    // Start deepforge in background
-    const args = configFile ? ['start', '--config', configFile] : ['start', '--config', join(projectDir, 'deepforge.json')];
-    const child = execFile(deepforgeBin, args, {
+    // Start deepforge in background using Electron as Node
+    const cfgArg = configFile || join(projectDir, 'deepforge.json');
+    const logPath = join(projectDir, 'forge.log');
+    const logFd = openSync(logPath, 'a');
+    const { spawn: spawnChild } = require('node:child_process');
+    const child = spawnChild(process.execPath, [deepforgeEntry, 'start', '--config', cfgArg], {
       cwd: projectDir,
       detached: true,
-      stdio: 'ignore' as any,
-    } as any);
+      stdio: ['ignore', logFd, logFd],
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+    });
     child.unref();
+    try { closeSync(logFd); } catch {}
+
+    // Write PID file
+    if (child.pid) {
+      writeFileSync(join(projectDir, 'forge.pid'), String(child.pid));
+    }
 
     // Update state to running
     const statePath = join(projectDir, 'forge-state.json');
@@ -619,8 +638,7 @@ export function registerIPCHandlers(
 
     // Find claude binary
     const claudePaths = [
-      join(homedir(), '.mlb', 'bin', 'claude'),
-      '/usr/local/bin/claude',
+      join(homedir(), '.local', 'bin', 'claude'),
     ];
     let claudeBin: string | null = null;
     for (const p of claudePaths) {

@@ -1,6 +1,6 @@
 {
   "name": "@mlb/manager",
-  "version": "0.7.9",
+  "version": "0.8.0",
   "main": "dist/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -9,7 +9,7 @@
     "pack": "electron-builder --dir",
     "predist": "node scripts/bundle-bridge.mjs",
     "dist": "electron-builder",
-    "postdist": "rm -rf bridge-bundle"
+    "postdist": "rm -rf bridge-bundle deepforge-bundle"
   },
   "dependencies": {
     "@mlb/shared": "workspace:*",

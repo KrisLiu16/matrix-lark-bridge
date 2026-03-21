@@ -17,7 +17,7 @@ import type {
 
 export class ForgeEngine {
   private project: ForgeProject;
-  private state: ForgeState;
+  private state!: ForgeState;
   private workDir: string;
   private statePath: string;
   private stopped = false;
@@ -47,14 +47,25 @@ export class ForgeEngine {
 
     // Load or init state
     if (existsSync(this.statePath)) {
-      this.state = JSON.parse(readFileSync(this.statePath, 'utf-8'));
-      // Crash recovery: running → pending
-      for (const iter of this.state.iterations) {
-        for (const task of iter.tasks) {
-          if (task.status === 'running') task.status = 'pending';
+      try {
+        this.state = JSON.parse(readFileSync(this.statePath, 'utf-8'));
+        // Crash recovery: running → pending
+        for (const iter of this.state.iterations) {
+          for (const task of iter.tasks) {
+            if (task.status === 'running') task.status = 'pending';
+          }
         }
+      } catch (err) {
+        console.error(`[forge] corrupt state file, resetting: ${(err as Error).message}`);
+        // Back up the corrupt file for debugging
+        try {
+          const { copyFileSync: cpSync } = require('node:fs');
+          cpSync(this.statePath, this.statePath + '.corrupt');
+        } catch { /* ignore */ }
+        this.state = undefined!; // fall through to init below
       }
-    } else {
+    }
+    if (!this.state) {
       this.state = {
         projectId: project.id,
         phase: 'setup',
@@ -482,8 +493,8 @@ export class ForgeEngine {
     this.log(`Iteration ${iterNum} complete`);
     this.state.consecutiveFailures = 0;
 
-    // Check if Leader declared project complete
-    if (result.output?.trim().startsWith('PROJECT_COMPLETE')) {
+    // Check if Leader declared project complete (anywhere in output)
+    if (result.output?.includes('PROJECT_COMPLETE')) {
       this.log('Leader declared PROJECT_COMPLETE — entering completion phase');
       this.setPhase('completing');
     } else {

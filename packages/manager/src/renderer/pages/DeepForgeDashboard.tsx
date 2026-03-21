@@ -481,6 +481,8 @@ function ProjectDetail({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [packageLogs, setPackageLogs] = useState<string[]>([]);
   const [showPackageModal, setShowPackageModal] = useState(false);
+  const [showResumeModal, setShowResumeModal] = useState(false);
+  const [resumeMsg, setResumeMsg] = useState('');
   const packageLogsEndRef = useRef<HTMLDivElement>(null);
   // Force re-render for elapsed time on running tasks
   const [, setTick] = useState(0);
@@ -551,11 +553,21 @@ function ProjectDetail({
     }
   };
 
-  const handleRestart = async () => {
+  const handleRestart = () => {
     if (!project) return;
-    if (!confirm('将用最新代码重新启动，保留已有进度。确定吗？')) return;
+    setResumeMsg('');
+    setShowResumeModal(true);
+  };
+
+  const handleResumeConfirm = async () => {
+    if (!project) return;
     try {
       setActionLoading('resume');
+      setShowResumeModal(false);
+      // Inject message to Leader before resuming (if provided)
+      if (resumeMsg.trim()) {
+        await window.mlb.deepforge.inject(project.id, `# 用户新指令（立即执行）\n\n${resumeMsg.trim()}\n\n**重要：请立即按照此指令调整方向，不要等下一轮。**`);
+      }
       await window.mlb.deepforge.resume(project.id);
       await fetchProjects();
     } catch (err) {
@@ -848,6 +860,44 @@ function ProjectDetail({
           </div>
         )}
       </div>
+
+      {/* Resume modal */}
+      {showResumeModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-[480px] border border-slate-200 dark:border-slate-700">
+            <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-700">
+              <span className="text-base font-semibold text-slate-800 dark:text-slate-200">重新执行</span>
+            </div>
+            <div className="p-5 space-y-3">
+              <p className="text-xs text-slate-500 dark:text-slate-400">可选：给 Leader 一条指令，立即按新方向迭代。留空则直接继续。</p>
+              <textarea
+                value={resumeMsg}
+                onChange={(e) => setResumeMsg(e.target.value)}
+                placeholder="例如：改用方案 B、重点对比钉钉、把报告改成英文..."
+                rows={3}
+                className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                autoFocus
+                onKeyDown={(e) => { if (e.key === 'Enter' && e.metaKey) handleResumeConfirm(); }}
+              />
+              <p className="text-[11px] text-slate-400">⌘+Enter 快速启动</p>
+            </div>
+            <div className="px-5 py-3 border-t border-slate-200 dark:border-slate-700 flex justify-end gap-2">
+              <button
+                onClick={() => setShowResumeModal(false)}
+                className="text-xs px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleResumeConfirm}
+                className="text-xs px-4 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
+              >
+                {resumeMsg.trim() ? '注入指令并启动' : '直接启动'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Package progress modal */}
       {showPackageModal && (

@@ -1,6 +1,7 @@
 import { app, ipcMain, shell, type BrowserWindow } from 'electron';
-import { readdirSync, statSync, readFileSync, existsSync, openSync, readSync, closeSync, realpathSync } from 'node:fs';
+import { readdirSync, statSync, readFileSync, existsSync, openSync, readSync, closeSync, realpathSync, writeFileSync, rmSync, unlinkSync } from 'node:fs';
 import { join, resolve, relative } from 'node:path';
+import { execFile } from 'node:child_process';
 import { homedir } from 'node:os';
 import type { BridgeConfig } from '@mlb/shared';
 import { WORKSPACE_ROOT } from '@mlb/shared';
@@ -425,9 +426,129 @@ export function registerIPCHandlers(
     for (const baseDir of DEEPFORGE_DIRS) {
       const dir = join(baseDir, projectId);
       if (existsSync(dir)) {
-        shell.openPath(dir);
+        // Use showItemInFolder with a known child file for reliable Finder opening
+        const stateFile = join(dir, 'forge-state.json');
+        if (existsSync(stateFile)) {
+          shell.showItemInFolder(stateFile);
+        } else {
+          // Fallback: show the directory itself in its parent
+          shell.showItemInFolder(dir);
+        }
         return;
       }
+    }
+  });
+
+  // Helper: find project directory across all DEEPFORGE_DIRS
+  function findProjectDir(projectId: string): string | null {
+    for (const baseDir of DEEPFORGE_DIRS) {
+      const dir = join(baseDir, projectId);
+      if (existsSync(dir)) return dir;
+    }
+    return null;
+  }
+
+  // Helper: kill process by PID from forge.pid
+  function killProjectProcess(projectDir: string): boolean {
+    const pidPath = join(projectDir, 'forge.pid');
+    if (!existsSync(pidPath)) return false;
+    try {
+      const pid = parseInt(readFileSync(pidPath, 'utf-8').trim(), 10);
+      if (pid > 0) {
+        process.kill(pid, 'SIGTERM');
+        // Clean up pid file
+        try { unlinkSync(pidPath); } catch { /* ignore */ }
+        return true;
+      }
+    } catch { /* process not running */ }
+    return false;
+  }
+
+  ipcMain.handle('deepforge:stop', async (_event, projectId: string) => {
+    const projectDir = findProjectDir(projectId);
+    if (!projectDir) throw new Error(`DeepForge project not found: ${projectId}`);
+
+    // Kill the process
+    killProjectProcess(projectDir);
+
+    // Update forge-state.json phase to "paused"
+    const statePath = join(projectDir, 'forge-state.json');
+    if (existsSync(statePath)) {
+      try {
+        const stateData = JSON.parse(readFileSync(statePath, 'utf-8'));
+        stateData.phase = 'paused';
+        writeFileSync(statePath, JSON.stringify(stateData, null, 2), 'utf-8');
+      } catch (err) {
+        throw new Error(`Failed to update forge-state.json: ${(err as Error).message}`);
+      }
+    }
+  });
+
+  ipcMain.handle('deepforge:resume', async (_event, projectId: string) => {
+    const projectDir = findProjectDir(projectId);
+    if (!projectDir) throw new Error(`DeepForge project not found: ${projectId}`);
+
+    // Find deepforge binary
+    const deepforgePaths = [
+      join(homedir(), '.mlb', 'bin', 'deepforge'),
+      join(homedir(), '.local', 'bin', 'deepforge'),
+      '/usr/local/bin/deepforge',
+      '/opt/homebrew/bin/deepforge',
+    ];
+    let deepforgeBin: string | null = null;
+    for (const p of deepforgePaths) {
+      if (existsSync(p)) { deepforgeBin = p; break; }
+    }
+    if (!deepforgeBin) {
+      // Try to find via PATH using 'which'
+      try {
+        const { execFileSync } = require('node:child_process');
+        deepforgeBin = execFileSync('which', ['deepforge'], { encoding: 'utf-8' }).trim();
+      } catch { /* not found */ }
+    }
+    if (!deepforgeBin) {
+      throw new Error('deepforge binary not found. Please ensure deepforge CLI is installed and in your PATH.');
+    }
+
+    // Read project config to get the config file
+    let configFile: string | null = null;
+    for (const cfgName of ['forge-project.json', 'deepforge.json']) {
+      const cfgPath = join(projectDir, cfgName);
+      if (existsSync(cfgPath)) { configFile = cfgPath; break; }
+    }
+
+    // Start deepforge in background
+    const args = configFile ? ['start', '--config', configFile] : ['start', '--config', join(projectDir, 'deepforge.json')];
+    const child = execFile(deepforgeBin, args, {
+      cwd: projectDir,
+      detached: true,
+      stdio: 'ignore' as any,
+    } as any);
+    child.unref();
+
+    // Update state to running
+    const statePath = join(projectDir, 'forge-state.json');
+    if (existsSync(statePath)) {
+      try {
+        const stateData = JSON.parse(readFileSync(statePath, 'utf-8'));
+        stateData.phase = 'running';
+        writeFileSync(statePath, JSON.stringify(stateData, null, 2), 'utf-8');
+      } catch { /* ignore */ }
+    }
+  });
+
+  ipcMain.handle('deepforge:delete', async (_event, projectId: string) => {
+    const projectDir = findProjectDir(projectId);
+    if (!projectDir) throw new Error(`DeepForge project not found: ${projectId}`);
+
+    // Kill process first if still running
+    killProjectProcess(projectDir);
+
+    // Delete the entire project directory
+    try {
+      rmSync(projectDir, { recursive: true, force: true });
+    } catch (err) {
+      throw new Error(`Failed to delete project directory: ${(err as Error).message}`);
     }
   });
 

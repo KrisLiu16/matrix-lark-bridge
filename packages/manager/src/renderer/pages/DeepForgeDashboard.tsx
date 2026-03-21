@@ -352,6 +352,7 @@ export default function DeepForgeDashboard() {
             detailLoading={detailLoading}
             onBack={() => selectProject(null)}
             onRefreshLogs={() => { if (selectedProject) fetchLogs(selectedProject); }}
+            onProjectDeleted={() => selectProject(null)}
           />
         ) : (
           <div className="p-6 grid gap-3 grid-cols-1 lg:grid-cols-2 xl:grid-cols-3">
@@ -462,7 +463,7 @@ function ProjectCard({ project, onClick }: { project: DeepForgeProject; onClick:
 }
 
 function ProjectDetail({
-  project, detailState, detailLogs, detailLoading, onBack, onRefreshLogs,
+  project, detailState, detailLogs, detailLoading, onBack, onRefreshLogs, onProjectDeleted,
 }: {
   project: DeepForgeProject | null;
   detailState: any;
@@ -470,11 +471,58 @@ function ProjectDetail({
   detailLoading: boolean;
   onBack: () => void;
   onRefreshLogs: () => void;
+  onProjectDeleted: () => void;
 }) {
   const [showLogs, setShowLogs] = useState(false);
   const [expandedTask, setExpandedTask] = useState<number | null>(null);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   // Force re-render for elapsed time on running tasks
   const [, setTick] = useState(0);
+
+  const { fetchProjects } = useDeepForgeStore();
+
+  const handleStop = async () => {
+    if (!project) return;
+    if (!confirm('确定要终止该任务吗？正在执行的进程将被强制停止。')) return;
+    try {
+      setActionLoading('stop');
+      await window.mlb.deepforge.stop(project.id);
+      await fetchProjects();
+    } catch (err) {
+      alert(`终止失败: ${(err as Error).message}`);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleResume = async () => {
+    if (!project) return;
+    try {
+      setActionLoading('resume');
+      await window.mlb.deepforge.resume(project.id);
+      await fetchProjects();
+    } catch (err) {
+      alert(`继续失败: ${(err as Error).message}`);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!project) return;
+    try {
+      setActionLoading('delete');
+      await window.mlb.deepforge.delete(project.id);
+      await fetchProjects();
+      onProjectDeleted();
+    } catch (err) {
+      alert(`删除失败: ${(err as Error).message}`);
+    } finally {
+      setActionLoading(null);
+      setShowDeleteConfirm(false);
+    }
+  };
 
   useEffect(() => {
     if (!project?.tasks.some(t => t.status === 'running')) return;
@@ -515,13 +563,35 @@ function ProjectDetail({
         <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${phaseColor.bg} ${phaseColor.text}`}>
           {PHASE_LABELS[project.phase] || project.phase}
         </span>
-        <button
-          onClick={() => window.mlb.deepforge.reveal(project.id)}
-          className="ml-auto text-xs px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
-          title="在访达中打开工作目录"
-        >
-          打开目录
-        </button>
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={() => window.mlb.deepforge.reveal(project.id)}
+            className="text-xs px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
+            title="在访达中打开工作目录"
+          >
+            打开目录
+          </button>
+          {project.phase === 'paused' && (
+            <button
+              onClick={handleResume}
+              disabled={actionLoading === 'resume'}
+              className="text-xs px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-colors disabled:opacity-50"
+              title="继续执行任务"
+            >
+              {actionLoading === 'resume' ? '启动中...' : '继续'}
+            </button>
+          )}
+          {project.isRunning && (
+            <button
+              onClick={handleStop}
+              disabled={actionLoading === 'stop'}
+              className="text-xs px-2.5 py-1 rounded-lg bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/50 transition-colors disabled:opacity-50"
+              title="终止正在运行的任务"
+            >
+              {actionLoading === 'stop' ? '终止中...' : '终止'}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Info grid */}
@@ -651,6 +721,39 @@ function ProjectDetail({
                 </div>
               ))
             )}
+          </div>
+        )}
+      </div>
+
+      {/* Delete project */}
+      <div className="mt-8 pt-6 border-t border-slate-200 dark:border-slate-700">
+        {!showDeleteConfirm ? (
+          <button
+            onClick={() => setShowDeleteConfirm(true)}
+            className="text-xs text-red-500 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 transition-colors"
+          >
+            删除项目
+          </button>
+        ) : (
+          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/50 rounded-xl p-4">
+            <p className="text-sm text-red-700 dark:text-red-400 mb-3">
+              确定删除该项目吗？所有产出将被永久删除，此操作不可恢复。
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={handleDelete}
+                disabled={actionLoading === 'delete'}
+                className="text-xs px-3 py-1.5 rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors disabled:opacity-50"
+              >
+                {actionLoading === 'delete' ? '删除中...' : '确认删除'}
+              </button>
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                className="text-xs px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
+              >
+                取消
+              </button>
+            </div>
           </div>
         )}
       </div>

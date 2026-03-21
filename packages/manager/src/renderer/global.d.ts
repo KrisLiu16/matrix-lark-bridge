@@ -42,6 +42,10 @@ interface MlbAPI {
     }[]>;
     status(projectId: string): Promise<any>;
     logs(projectId: string, lines?: number): Promise<string[]>;
+    reveal(projectId: string): Promise<void>;
+    stop(projectId: string): Promise<void>;
+    resume(projectId: string): Promise<void>;
+    delete(projectId: string): Promise<void>;
   };
   system: {
     getWorkspaceRoot(): Promise<string>;

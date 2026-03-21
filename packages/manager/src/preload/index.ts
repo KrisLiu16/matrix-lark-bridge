@@ -53,6 +53,12 @@ const api = {
       ipcRenderer.invoke('deepforge:task-log', projectId, taskId),
     reveal: (projectId: string): Promise<void> =>
       ipcRenderer.invoke('deepforge:reveal', projectId),
+    stop: (projectId: string): Promise<void> =>
+      ipcRenderer.invoke('deepforge:stop', projectId),
+    resume: (projectId: string): Promise<void> =>
+      ipcRenderer.invoke('deepforge:resume', projectId),
+    delete: (projectId: string): Promise<void> =>
+      ipcRenderer.invoke('deepforge:delete', projectId),
   },
   claude: {
     check: (): Promise<{ installed: boolean; version?: string; path?: string }> =>

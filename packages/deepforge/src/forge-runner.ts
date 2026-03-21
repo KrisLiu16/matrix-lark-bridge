@@ -70,12 +70,14 @@ export async function forgeRun(opts: ForgeRunOpts): Promise<ForgeRunResult> {
       if (done) return;
       done = true;
       clearTimeout(timer);
-      try { proc?.stdin?.end(); proc?.kill('SIGTERM'); } catch { /* ignore */ }
-      // SIGKILL fallback: force-kill if still alive after 5s
-      const ref = proc;
-      if (ref) {
+      // Kill entire process group (shell + CC child) via negative PID
+      const pid = proc?.pid;
+      try { proc?.stdin?.end(); } catch { /* ignore */ }
+      if (pid) {
+        try { process.kill(-pid, 'SIGTERM'); } catch { /* ignore */ }
+        // SIGKILL fallback: force-kill entire group if still alive after 5s
         setTimeout(() => {
-          try { ref.kill('SIGKILL'); } catch { /* already dead */ }
+          try { process.kill(-pid, 'SIGKILL'); } catch { /* already dead */ }
         }, 5000);
       }
       resolve({ output, costUsd, durationMs: Date.now() - start, success, error });
@@ -90,6 +92,7 @@ export async function forgeRun(opts: ForgeRunOpts): Promise<ForgeRunResult> {
         cwd: opts.workDir,
         stdio: ['pipe', 'pipe', 'pipe'],
         env: { ...process.env, ...(opts.env || {}) },
+        detached: true, // Create new process group so we can kill the entire tree
       });
     } catch (err) {
       finish(false, `Failed to spawn CC: ${(err as Error).message}`);

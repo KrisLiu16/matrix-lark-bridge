@@ -302,6 +302,7 @@ export class ForgeEngine {
           userPrompt: buildForgePrompt(task.role, task, this.project, this.workDir, this.state.currentIteration),
           env: this.getEnv(),
           taskId: task.id,
+          timeoutMs: 60 * 60 * 1000, // 1 hour
         });
 
         task.status = result.success ? 'completed' : 'failed';

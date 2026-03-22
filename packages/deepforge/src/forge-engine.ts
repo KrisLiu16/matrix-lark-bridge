@@ -5,7 +5,7 @@
  * Critic and Verifier are framework-enforced, cannot be skipped.
  * Index validation is done automatically by the framework (validateIndex), not a separate agent.
  */
-import { writeFileSync, readFileSync, existsSync, mkdirSync, appendFileSync, readdirSync, statSync, copyFileSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, mkdirSync, appendFileSync, readdirSync, statSync, copyFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { forgeRun } from './forge-runner.js';
 import { leaderPrompt, criticPrompt, verifierPrompt, dynamicRolePrompt } from './forge-roles.js';
@@ -38,8 +38,9 @@ export class ForgeEngine {
     this.workDir = join(process.env.HOME || '/tmp', '.deepforge', 'projects', project.id);
     this.statePath = join(this.workDir, 'forge-state.json');
     this.log = opts?.log || ((m) => {
-      const t = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-      console.log(`[${t}] [forge:${project.id}] ${m}`);
+      const t = new Date().toISOString().replace('T', ' ').substring(0, 19);
+      const phase = this.state?.phase || 'init';
+      console.log(`[${t}] [forge] [${project.id}] [${phase}] ${m}`);
     });
     this.onEvent = opts?.onEvent;
     this.onNotify = opts?.onNotify;
@@ -56,11 +57,11 @@ export class ForgeEngine {
           }
         }
       } catch (err) {
-        console.error(`[forge] corrupt state file, resetting: ${(err as Error).message}`);
+        const t = new Date().toISOString().replace('T', ' ').substring(0, 19);
+        console.error(`[${t}] [forge] [${project.id}] [init] Corrupt state file, resetting: ${(err as Error).message}`);
         // Back up the corrupt file for debugging
         try {
-          const { copyFileSync: cpSync } = require('node:fs');
-          cpSync(this.statePath, this.statePath + '.corrupt');
+          copyFileSync(this.statePath, this.statePath + '.corrupt');
         } catch { /* ignore */ }
         this.state = undefined!; // fall through to init below
       }
@@ -156,7 +157,7 @@ export class ForgeEngine {
       `# ${this.project.title}\n\n${this.project.description}\n`);
     writeFileSync(join(this.workDir, 'index.md'), '# 产出索引\n\n');
     writeFileSync(join(this.workDir, 'status.md'),
-      `# 状态\n\n阶段：初始化\n迭代：0\n`);
+      `# 状态\n\nDeepForge v0.8.3\n阶段：初始化\n迭代：0\n`);
     writeFileSync(join(this.workDir, 'feedback.md'), '');
     writeFileSync(join(this.workDir, 'iteration-log.md'), '# 迭代日志\n\n');
 
@@ -200,6 +201,8 @@ export class ForgeEngine {
       userPrompt: buildForgePrompt('leader', task, this.project, this.workDir, iterNum),
       env: this.getEnv(),
       taskId: task.id,
+      roleName: 'leader',
+      taskDescription: task.description,
       timeoutMs: 60 * 60 * 1000, // 1 hour
     });
 
@@ -302,6 +305,8 @@ export class ForgeEngine {
           userPrompt: buildForgePrompt(task.role, task, this.project, this.workDir, this.state.currentIteration),
           env: this.getEnv(),
           taskId: task.id,
+          roleName: task.role,
+          taskDescription: task.description,
           timeoutMs: 60 * 60 * 1000, // 1 hour
         });
 
@@ -351,7 +356,9 @@ export class ForgeEngine {
       userPrompt: buildForgePrompt('critic', task, this.project, this.workDir, iterNum),
       env: this.getEnv(),
       taskId: task.id,
-      timeoutMs: 60 * 60 * 1000, // 1 hour // Critic: 15 min max
+      roleName: 'critic',
+      taskDescription: task.description,
+      timeoutMs: 60 * 60 * 1000, // 1 hour
     });
 
     // Write critic feedback, preserving user's BINDING requirements
@@ -375,7 +382,23 @@ export class ForgeEngine {
     this.persist(); // Persist immediately so GUI sees Critic completed
 
     this.addCost(result.costUsd);
-    if (iter) iter.criticFeedback = result.output;
+    if (iter) {
+      iter.criticFeedback = result.output;
+      // Determine if critic cleared: empty/missing output = failed (crash/timeout)
+      const criticOutput = result.output || '';
+      if (!criticOutput.trim()) {
+        // Empty output means Critic crashed or timed out — treat as not cleared
+        iter.criticCleared = false;
+        this.log('⚠️ Critic produced empty output (crash/timeout) — treating as not cleared');
+      } else {
+        // Match "关键问题" section followed by numbered items (1. xxx)
+        // Also match standalone CRITICAL markers
+        const hasCriticalSection = /关键问题[^]*?\n\s*\d+\.\s/m.test(criticOutput);
+        const hasCriticalMarker = /CRITICAL|严重问题/i.test(criticOutput);
+        const hasBlockingFeedback = /必须解决[：:]\s*\n\s*\d+\./m.test(criticOutput);
+        iter.criticCleared = !(hasCriticalSection || hasCriticalMarker || hasBlockingFeedback);
+      }
+    }
     this.log(`Critic: ${result.success ? '✅' : '❌'} (${this.fmtDuration(result.durationMs)})`);
     this.emit('critic', `Critic completed`, 'critic');
 
@@ -415,7 +438,9 @@ export class ForgeEngine {
       userPrompt: buildForgePrompt('verifier', task, this.project, this.workDir, iterNum),
       env: this.getEnv(),
       taskId: task.id,
-      timeoutMs: 60 * 60 * 1000, // 1 hour // Verifier: 15 min max
+      roleName: 'verifier',
+      taskDescription: task.description,
+      timeoutMs: 60 * 60 * 1000, // 1 hour
     });
 
     task.status = result.success ? 'completed' : 'failed';
@@ -429,13 +454,26 @@ export class ForgeEngine {
     if (iter) iter.verifierResult = result.output;
     writeFileSync(join(this.workDir, 'reports', 'verifier-report.md'), result.output || '');
 
-    if (result.output?.includes('❌')) {
-      this.log('❌ Verifier found issues — appending to feedback');
-      appendFileSync(join(this.workDir, 'feedback.md'),
-        `\n\n# Verifier 问题 — 迭代 ${iterNum}\n\n${result.output}`);
+    // Determine if verifier passed: empty/missing output = failed (crash/timeout)
+    const verifierOutput = result.output || '';
+    let hasVerifierIssues: boolean;
+    if (!verifierOutput.trim()) {
+      // Empty output means Verifier crashed or timed out — treat as failed
+      hasVerifierIssues = true;
+      if (iter) iter.verifierPassed = false;
+      this.log('⚠️ Verifier produced empty output (crash/timeout) — treating as failed');
+    } else {
+      hasVerifierIssues = /❌|FALSE|BLOCKED|阻断|blocked by|验证失败|校验失败|check failed|test failed|FAIL|未修复/i.test(verifierOutput);
+      if (iter) iter.verifierPassed = !hasVerifierIssues;
     }
 
-    this.log(`Verifier: ${result.success ? '✅' : '❌'} (${this.fmtDuration(result.durationMs)})`);
+    if (hasVerifierIssues) {
+      this.log('❌ Verifier found issues — appending to feedback');
+      appendFileSync(join(this.workDir, 'feedback.md'),
+        `\n\n# Verifier 问题 — 迭代 ${iterNum}\n\n${verifierOutput}`);
+    }
+
+    this.log(`Verifier: ${!hasVerifierIssues ? '✅' : '❌'} (${this.fmtDuration(result.durationMs)})`);
 
     if (!result.success) this.reportTaskError(task, result.error);
 
@@ -466,6 +504,8 @@ export class ForgeEngine {
       userPrompt: buildForgePrompt('leader', task, this.project, this.workDir, iterNum),
       env: this.getEnv(),
       taskId: task.id,
+      roleName: 'leader',
+      taskDescription: task.description,
       timeoutMs: 5 * 60 * 1000, // Leader iterate: 5 min max (summarize + decide, not execute)
     });
 
@@ -484,7 +524,7 @@ export class ForgeEngine {
 
     // Update status
     writeFileSync(join(this.workDir, 'status.md'),
-      `# 状态\n\n阶段：迭代 ${iterNum} 完成\n迭代：${iterNum}\n`);
+      `# 状态\n\nDeepForge v0.8.3\n阶段：迭代 ${iterNum} 完成\n迭代：${iterNum}\n`);
 
     if (iter) {
       iter.leaderSummary = result.output;
@@ -494,12 +534,37 @@ export class ForgeEngine {
     this.log(`Iteration ${iterNum} complete`);
     this.state.consecutiveFailures = 0;
 
-    // Check if Leader declared project complete (anywhere in output)
+    // Completion guard: check if Leader declared project complete
+    const MAX_ITERATIONS = 20;
     if (result.output?.includes('PROJECT_COMPLETE')) {
-      this.log('Leader declared PROJECT_COMPLETE — entering completion phase');
-      this.setPhase('completing');
+      // Check verifier and critic flags from current iteration
+      const canComplete = this.canCompleteProject(iterNum);
+
+      if (canComplete) {
+        this.log('Leader declared PROJECT_COMPLETE — all checks passed, entering completion phase');
+        this.setPhase('completing');
+      } else if (iterNum >= MAX_ITERATIONS) {
+        this.log(`⚠️ Max iterations (${MAX_ITERATIONS}) reached — allowing completion with unresolved issues`);
+        appendFileSync(join(this.workDir, 'feedback.md'),
+          `\n\n# ⚠️ 强制完成 — 迭代 ${iterNum}\n\n达到最大迭代次数 ${MAX_ITERATIONS}，带未解决问题完成项目。\n`);
+        this.setPhase('completing');
+      } else {
+        this.log('🚫 Leader declared PROJECT_COMPLETE but Verifier/Critic have unresolved issues — forcing next iteration');
+        appendFileSync(join(this.workDir, 'feedback.md'),
+          `\n\n# 🚫 完成被阻断 — 迭代 ${iterNum}\n\n` +
+          `Leader 试图声明 PROJECT_COMPLETE，但被完成守卫阻断：\n` +
+          `- Verifier 通过: ${iter?.verifierPassed ? '✅' : '❌ 有未修复问题'}\n` +
+          `- Critic 清除: ${iter?.criticCleared ? '✅' : '❌ 有关键问题未解决'}\n\n` +
+          `必须先解决上述问题才能声明完成。剩余迭代配额: ${MAX_ITERATIONS - iterNum} 轮。\n`);
+        this.setPhase('planning'); // Force next iteration
+      }
     } else {
-      this.setPhase('planning'); // Next iteration
+      if (iterNum >= MAX_ITERATIONS) {
+        this.log(`⚠️ Max iterations (${MAX_ITERATIONS}) reached without PROJECT_COMPLETE — auto-completing`);
+        this.setPhase('completing');
+      } else {
+        this.setPhase('planning'); // Next iteration
+      }
     }
   }
 
@@ -529,6 +594,8 @@ export class ForgeEngine {
       userPrompt: this.packagerTask(),
       env: this.getEnv(),
       taskId: task.id,
+      roleName: 'packager',
+      taskDescription: task.description,
       timeoutMs: 60 * 60 * 1000, // 1 hour
     });
 
@@ -790,7 +857,9 @@ ${iterLog}
 
   private persist(): void {
     this.state.updatedAt = new Date().toISOString();
-    writeFileSync(this.statePath, JSON.stringify(this.state, null, 2));
+    const tmpPath = this.statePath + '.tmp';
+    writeFileSync(tmpPath, JSON.stringify(this.state, null, 2));
+    renameSync(tmpPath, this.statePath);
   }
 
   private emit(type: ForgeEvent['type'], message: string, role?: string, taskId?: string): void {
@@ -841,16 +910,93 @@ ${iterLog}
   }
 
   private fallbackTasks(iterNum: number): ForgeTask[] {
-    // Always return at least one task to prevent empty iteration loops
-    const first = this.project.roles[0];
-    const roleName = first?.name || 'writer';
-    return [{
-      id: `${roleName}-${iterNum}-fallback`,
-      role: roleName,
-      description: `继续推进项目 ${this.project.title}`,
-      priority: 'medium' as const,
-      status: 'pending' as const,
-    }];
+    const tasks: ForgeTask[] = [];
+
+    if (iterNum > 1) {
+      const prevIter = this.state.iterations.find(i => i.number === iterNum - 1);
+      if (prevIter) {
+        // Re-queue failed tasks with retry context
+        const failed = prevIter.tasks.filter(t => t.status === 'failed' && !['leader', 'critic', 'verifier'].includes(t.role));
+        for (const ft of failed) {
+          if (this.project.roles.some(r => r.name === ft.role)) {
+            tasks.push({
+              id: `${ft.role}-${iterNum}-retry`,
+              role: ft.role,
+              description: `[重试] ${ft.description}${ft.error ? ` (上轮失败: ${ft.error.substring(0, 80)})` : ''}`,
+              priority: 'high' as const,
+              status: 'pending' as const,
+            });
+          }
+        }
+        // If verifier found issues, create fix task
+        if (prevIter.verifierResult?.includes('❌')) {
+          const first = this.project.roles[0];
+          if (first) {
+            tasks.push({
+              id: `${first.name}-${iterNum}-fix-verifier`,
+              role: first.name,
+              description: `修复 Verifier 发现的问题。查看 reports/verifier-report.md 获取详情。`,
+              priority: 'high' as const,
+              status: 'pending' as const,
+            });
+          }
+        }
+      }
+    }
+
+    if (tasks.length === 0) {
+      // Analyze critic/verifier/feedback to create targeted fallback tasks
+      const criticPath = join(this.workDir, 'reports', 'critic-report.md');
+      const verifierPath = join(this.workDir, 'reports', 'verifier-report.md');
+      const feedbackPath = join(this.workDir, 'feedback.md');
+      const criticContent = existsSync(criticPath) ? readFileSync(criticPath, 'utf-8') : '';
+      const verifierContent = existsSync(verifierPath) ? readFileSync(verifierPath, 'utf-8') : '';
+      const feedbackContent = existsSync(feedbackPath) ? readFileSync(feedbackPath, 'utf-8') : '';
+
+      const hasCriticIssues = /关键问题|CRITICAL|必须解决|严重/i.test(criticContent);
+      const hasVerifierIssues = /❌|FALSE|BLOCKED|阻断|blocked by|验证失败|校验失败|check failed|test failed|FAIL|未修复/i.test(verifierContent);
+      const hasTimeoutWarning = /超时|timed out/i.test(feedbackContent);
+
+      if (hasVerifierIssues && this.project.roles[0]) {
+        const snippet = verifierContent.substring(0, 200).replace(/\n/g, ' ');
+        tasks.push({
+          id: `${this.project.roles[0].name}-${iterNum}-fix-verifier`,
+          role: this.project.roles[0].name,
+          description: `修复 Verifier 发现的问题: ${snippet}。详见 reports/verifier-report.md。`,
+          priority: 'high' as const,
+          status: 'pending' as const,
+        });
+      }
+
+      if (hasCriticIssues && this.project.roles[0]) {
+        const snippet = criticContent.substring(0, 200).replace(/\n/g, ' ');
+        tasks.push({
+          id: `${this.project.roles[0].name}-${iterNum}-fix-critic`,
+          role: this.project.roles[0].name,
+          description: `解决 Critic 关键问题: ${snippet}。详见 reports/critic-report.md。`,
+          priority: 'high' as const,
+          status: 'pending' as const,
+        });
+      }
+
+      if (tasks.length === 0) {
+        const first = this.project.roles[0];
+        const roleName = first?.name || 'writer';
+        const context = hasTimeoutWarning
+          ? '上轮有任务超时，请将工作拆分为更小的步骤执行。'
+          : `继续推进项目。查看 feedback.md 和 reports/ 了解当前状态。`;
+        tasks.push({
+          id: `${roleName}-${iterNum}-fallback`,
+          role: roleName,
+          description: `${context} 项目: ${this.project.title}`,
+          priority: 'medium' as const,
+          status: 'pending' as const,
+        });
+      }
+    }
+
+    this.log(`⚠️ Leader 未输出有效任务 JSON，根据上轮结果自动生成 ${tasks.length} 个 fallback 任务`);
+    return tasks;
   }
 
   private validateIndex(): string[] {
@@ -897,6 +1043,22 @@ ${iterLog}
       join(this.workDir, 'notifications', 'pending', `${nId}.json`),
       JSON.stringify(notification, null, 2),
     );
+  }
+
+  /** Check if project can complete: verifier passed and critic cleared */
+  private canCompleteProject(iterNum: number): boolean {
+    const iter = this.currentIter();
+    if (!iter) return true; // No iteration data, allow completion
+
+    // If verifier was skipped, treat as passed; otherwise require explicit true (not undefined)
+    const verifierOk = this.project.noVerifier || (iter.verifierPassed === true);
+    // If critic was skipped, treat as cleared; otherwise require explicit true (not undefined)
+    const criticOk = this.project.noCritic || (iter.criticCleared === true);
+
+    if (!verifierOk) this.log(`⚠️ Completion blocked: Verifier found unresolved issues in iteration ${iterNum}`);
+    if (!criticOk) this.log(`⚠️ Completion blocked: Critic has critical issues in iteration ${iterNum}`);
+
+    return verifierOk && criticOk;
   }
 
   private fmtDuration(ms: number): string {

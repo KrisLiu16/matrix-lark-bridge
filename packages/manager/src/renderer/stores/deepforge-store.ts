@@ -25,6 +25,7 @@ interface DeepForgeStore {
   detailState: any | null;
   detailLogs: string[];
   detailLoading: boolean;
+  detailError: string | null;
 
   // Actions
   fetchProjects: () => Promise<void>;
@@ -42,6 +43,7 @@ export const useDeepForgeStore = create<DeepForgeStore>((set, get) => ({
   detailState: null,
   detailLogs: [],
   detailLoading: false,
+  detailError: null,
 
   fetchProjects: async () => {
     try {
@@ -56,7 +58,7 @@ export const useDeepForgeStore = create<DeepForgeStore>((set, get) => ({
   },
 
   selectProject: (id) => {
-    set({ selectedProject: id, detailState: null, detailLogs: [] });
+    set({ selectedProject: id, detailState: null, detailLogs: [], detailError: null });
     if (id) {
       get().fetchDetail(id);
       get().fetchLogs(id);
@@ -76,9 +78,9 @@ export const useDeepForgeStore = create<DeepForgeStore>((set, get) => ({
     try {
       set({ detailLoading: true });
       const state = await window.mlb.deepforge.status(id);
-      set({ detailState: state });
-    } catch {
-      set({ detailState: null });
+      set({ detailState: state, detailError: null });
+    } catch (err) {
+      set({ detailState: null, detailError: (err as Error).message });
     } finally {
       set({ detailLoading: false });
     }

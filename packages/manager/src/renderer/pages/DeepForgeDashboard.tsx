@@ -290,7 +290,7 @@ function TimelineEntry({ entry, index, total }: { entry: LogEntry; index: number
 const FINISHED_PHASES = new Set(['completed', 'paused']);
 
 export default function DeepForgeDashboard() {
-  const { projects, loading, error, fetchProjects, selectedProject, selectProject, detailState, detailLogs, detailLoading, fetchLogs } = useDeepForgeStore();
+  const { projects, loading, error, fetchProjects, selectedProject, selectProject, detailState, detailLogs, detailLoading, detailError, fetchLogs } = useDeepForgeStore();
   const [tab, setTab] = useState<'active' | 'finished'>('active');
 
   // Poll projects every 5 seconds
@@ -379,6 +379,7 @@ export default function DeepForgeDashboard() {
             detailState={detailState}
             detailLogs={detailLogs}
             detailLoading={detailLoading}
+            detailError={detailError}
             onBack={() => selectProject(null)}
             onRefreshLogs={() => { if (selectedProject) fetchLogs(selectedProject); }}
             onProjectDeleted={() => selectProject(null)}
@@ -503,12 +504,13 @@ function ProjectCard({ project, onClick }: { project: DeepForgeProject; onClick:
 }
 
 function ProjectDetail({
-  project, detailState, detailLogs, detailLoading, onBack, onRefreshLogs, onProjectDeleted,
+  project, detailState, detailLogs, detailLoading, detailError, onBack, onRefreshLogs, onProjectDeleted,
 }: {
   project: DeepForgeProject | null;
   detailState: any;
   detailLogs: string[];
   detailLoading: boolean;
+  detailError: string | null;
   onBack: () => void;
   onRefreshLogs: () => void;
   onProjectDeleted: () => void;
@@ -726,6 +728,29 @@ function ProjectDetail({
         </div>
       </div>
 
+      {/* Detail load error */}
+      {detailError && (
+        <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/50 rounded-xl">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+            <svg className="w-4 h-4 text-red-500 shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+            </svg>
+              <div>
+                <p className="text-sm font-medium text-red-700 dark:text-red-400">加载项目详情失败</p>
+                <p className="text-xs text-red-600/70 dark:text-red-400/70 mt-0.5">{detailError}</p>
+              </div>
+            </div>
+            <button
+              onClick={pollDetail}
+              className="text-xs px-2.5 py-1 rounded-lg bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-900/60 transition-colors shrink-0"
+            >
+              重试
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Info grid */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
         <StatCard label="阶段" value={PHASE_LABELS[project.phase] || project.phase} />
@@ -798,46 +823,33 @@ function ProjectDetail({
 
       {/* Iterations timeline */}
       {iterations.length > 0 && (
-        <div className="mb-6">
-          <h2 className="text-sm font-semibold mb-3 text-slate-700 dark:text-slate-300">迭代记录</h2>
-          <div className="space-y-2">
-            {iterations.map((iter: any, i: number) => (
-              <div
-                key={i}
-                className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-3"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                    第 {i + 1} 次迭代
-                  </span>
-                  {iter.tasks && (
-                    <span className="text-xs text-slate-400">{iter.tasks.length} 个任务</span>
-                  )}
-                </div>
-                {Array.isArray(iter.tasks) && iter.tasks.length > 0 && (
-                  <div className="flex gap-1 mt-2">
-                    {iter.tasks.map((t: any, j: number) => (
-                      <span
-                        key={j}
-                        className={`text-[10px] px-1.5 py-0.5 rounded
-                          ${t.status === 'completed'
-                            ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400'
-                            : t.status === 'failed'
-                            ? 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400'
-                            : 'bg-slate-100 dark:bg-slate-700 text-slate-500'
-                          }`}
-                        title={`${getRoleLabel(t.role)}: ${STATUS_LABELS[t.status] || t.status}`}
-                      >
-                        {getRoleLabel(t.role)}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
+        <IterationsPanel iterations={iterations} />
       )}
+
+      {/* Completion block banner */}
+      {detailState && (() => {
+        const latestIter = iterations[iterations.length - 1];
+        const verifierResult = latestIter?.verifierResult || '';
+        const criticFeedback = latestIter?.criticFeedback || '';
+        const verifierIssues = (verifierResult.match(/\u274C/g) || []).length;
+        const criticHasIssues = criticFeedback.includes('关键问题') || criticFeedback.includes('\u274C');
+        const hasIssues = verifierIssues > 0 || criticHasIssues;
+        const parts: string[] = [];
+        if (verifierIssues > 0) parts.push(`Verifier 发现 ${verifierIssues} 个未解决问题`);
+        if (criticHasIssues) parts.push('Critic 发现关键问题');
+        return hasIssues ? (
+          <div className="mb-6 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/50 rounded-xl">
+            <div className="flex items-center gap-2">
+              <svg className="w-4 h-4 text-red-500 shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+              </svg>
+              <p className="text-sm text-red-700 dark:text-red-400">
+                完成被阻断：{parts.join('；')}
+              </p>
+            </div>
+          </div>
+        ) : null;
+      })()}
 
       {/* Logs section */}
       <div>
@@ -1093,12 +1105,12 @@ function TaskCard({
             <span className="text-[11px] text-slate-400 dark:text-slate-500 font-mono">
               {task.role !== roleLabel ? task.role : ''}
             </span>
-            {task.description && (
-              <span className="text-xs text-slate-400 dark:text-slate-500 truncate flex-1 min-w-0">
-                {task.description}
-              </span>
-            )}
           </div>
+          {task.description && !isExpanded && (
+            <p className="text-xs text-slate-400 dark:text-slate-500 mt-1 line-clamp-3">
+              {task.description}
+            </p>
+          )}
 
           {/* Running: progress animation + elapsed */}
           {task.status === 'running' && (
@@ -1181,7 +1193,7 @@ function TaskCard({
                 </svg>
                 <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">描述</span>
               </div>
-              <p className="text-xs text-slate-600 dark:text-slate-400 ml-[18px]">{task.description}</p>
+              <p className="text-xs text-slate-600 dark:text-slate-400 ml-[18px] whitespace-pre-wrap">{task.description}</p>
             </div>
           )}
 
@@ -1245,6 +1257,108 @@ function TaskCard({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function IterationsPanel({ iterations }: { iterations: any[] }) {
+  const [showAll, setShowAll] = useState(false);
+  const [expandedIter, setExpandedIter] = useState<number | null>(iterations.length - 1);
+  const displayed = showAll ? iterations : iterations.slice(-1);
+  const hiddenCount = iterations.length - 1;
+
+  return (
+    <div className="mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-300">迭代记录</h2>
+        {hiddenCount > 0 && (
+          <button
+            onClick={() => setShowAll(!showAll)}
+            className="text-xs text-indigo-500 dark:text-indigo-400 hover:underline"
+          >
+            {showAll ? '只看最新' : `查看全部 ${iterations.length} 轮`}
+          </button>
+        )}
+      </div>
+      <div className="space-y-2">
+        {displayed.map((iter: any, displayIdx: number) => {
+          const realIdx = showAll ? displayIdx : iterations.length - 1;
+          const isExpanded = expandedIter === realIdx;
+          const verifierResult = iter.verifierResult || '';
+          const criticFeedback = iter.criticFeedback || '';
+          const hasVerifierIssue = verifierResult.includes('\u274C');
+          const hasCriticIssue = criticFeedback.includes('\u5173\u952E\u95EE\u9898') || criticFeedback.includes('\u274C');
+          const verifierOk = verifierResult && !hasVerifierIssue;
+          const criticOk = criticFeedback && !hasCriticIssue;
+
+          return (
+            <div
+              key={realIdx}
+              className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden"
+            >
+              <div
+                className="flex items-center justify-between p-3 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-750"
+                onClick={() => setExpandedIter(isExpanded ? null : realIdx)}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                    第 {realIdx + 1} 次迭代
+                  </span>
+                  {iter.tasks && (
+                    <span className="text-xs text-slate-400">{iter.tasks.length} 个任务</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {/* Verifier badge */}
+                  {verifierResult && (
+                    <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                      hasVerifierIssue
+                        ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400'
+                        : 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400'
+                    }`} title={hasVerifierIssue ? 'Verifier 发现问题' : 'Verifier 通过'}>
+                      {hasVerifierIssue ? '\u274C' : '\u2714'} V
+                    </span>
+                  )}
+                  {/* Critic badge */}
+                  {criticFeedback && (
+                    <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                      hasCriticIssue
+                        ? 'bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400'
+                        : 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400'
+                    }`} title={hasCriticIssue ? 'Critic 有关键问题' : 'Critic 无关键问题'}>
+                      {hasCriticIssue ? '\u26A0' : '\u2714'} C
+                    </span>
+                  )}
+                  <svg className={`w-4 h-4 text-slate-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                  </svg>
+                </div>
+              </div>
+              {isExpanded && Array.isArray(iter.tasks) && iter.tasks.length > 0 && (
+                <div className="px-3 pb-3 border-t border-slate-100 dark:border-slate-700 pt-2">
+                  <div className="flex flex-wrap gap-1">
+                    {iter.tasks.map((t: any, j: number) => (
+                      <span
+                        key={j}
+                        className={`text-[10px] px-1.5 py-0.5 rounded
+                          ${t.status === 'completed'
+                            ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400'
+                            : t.status === 'failed'
+                            ? 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400'
+                            : 'bg-slate-100 dark:bg-slate-700 text-slate-500'
+                          }`}
+                        title={`${getRoleLabel(t.role)}: ${STATUS_LABELS[t.status] || t.status}${t.description ? ' — ' + t.description : ''}`}
+                      >
+                        {getRoleLabel(t.role)}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

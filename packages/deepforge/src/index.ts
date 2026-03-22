@@ -95,13 +95,13 @@ switch (command) {
     DEEPFORGE_EFFORT          推理力度（默认 max）
     DEEPFORGE_MAX_CONCURRENT  最大并发 CC 数（默认 5）
 
-  框架自动包含 3 个强制角色（不需要配置）:
-    - Leader:   每轮规划任务和总结（15 分钟超时）
-    - Critic:   每轮找问题、给负反馈（15 分钟超时）
-    - Verifier: 核查产出真实性（15 分钟超时）
-    - Packager: 项目完成时自动整理产出（15 分钟超时）
+  框架自动包含 4 个强制角色（不需要配置）:
+    - Leader:   每轮规划任务和总结（规划 1 小时，总结 5 分钟超时）
+    - Critic:   每轮找问题、给负反馈（1 小时超时）
+    - Verifier: 核查产出真实性（1 小时超时）
+    - Packager: 项目完成时自动整理产出（1 小时超时）
 
-  动态角色（用户定义）超时 30 分钟。
+  动态角色（用户定义）超时 1 小时。
 
   示例:
     deepforge start --config ~/.deepforge/projects/my-research/deepforge.json

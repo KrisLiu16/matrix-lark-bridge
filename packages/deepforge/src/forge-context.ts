@@ -74,6 +74,13 @@ export function buildForgePrompt(
     const criticReport = safe(join(workDir, 'reports', 'critic-report.md'));
     if (criticReport) parts.push(`## Critic 汇报\n${criticReport}`);
 
+    const verifierReport = safe(join(workDir, 'reports', 'verifier-report.md'));
+    if (verifierReport) parts.push(`## Verifier 核查结果\n${verifierReport}`);
+
+    // Inject previous iteration task summaries so Leader has full context
+    const prevIterSummary = buildPreviousIterSummary(workDir, iteration);
+    if (prevIterSummary) parts.push(`## 上轮任务完成摘要\n${prevIterSummary}`);
+
     // Only keep last 5 iterations to prevent context bloat
     const iterLog = safeTail(join(workDir, 'iteration-log.md'), 5);
     if (iterLog) parts.push(`## 迭代日志（近 5 轮）\n${iterLog}`);
@@ -94,4 +101,28 @@ export function buildForgePrompt(
   parts.push(`## 工作目录\n${workDir}\n所有产出保存在此目录内。`);
 
   return parts.join('\n\n---\n\n');
+}
+
+/** Build a summary of previous iteration's completed tasks for Leader context */
+function buildPreviousIterSummary(workDir: string, currentIteration: number): string {
+  if (currentIteration <= 1) return '';
+  const statePath = join(workDir, 'forge-state.json');
+  try {
+    if (!existsSync(statePath)) return '';
+    const state = JSON.parse(readFileSync(statePath, 'utf-8'));
+    const prevIter = state.iterations?.find((i: any) => i.number === currentIteration - 1);
+    if (!prevIter || !prevIter.tasks?.length) return '';
+
+    const lines: string[] = [];
+    for (const t of prevIter.tasks) {
+      const icon = t.status === 'completed' ? '✅' : t.status === 'failed' ? '❌' : '⏳';
+      const dur = t.durationMs ? `${Math.round(t.durationMs / 1000)}s` : '?';
+      const desc = (t.description || '').substring(0, 100);
+      lines.push(`- ${icon} **${t.id}**（${t.role}，${dur}）: ${desc}${t.error ? ` [错误: ${t.error.substring(0, 80)}]` : ''}`);
+    }
+    const completed = prevIter.tasks.filter((t: any) => t.status === 'completed').length;
+    const failed = prevIter.tasks.filter((t: any) => t.status === 'failed').length;
+    lines.unshift(`迭代 ${currentIteration - 1}：${completed} 完成，${failed} 失败，共 ${prevIter.tasks.length} 任务\n`);
+    return lines.join('\n');
+  } catch { return ''; }
 }

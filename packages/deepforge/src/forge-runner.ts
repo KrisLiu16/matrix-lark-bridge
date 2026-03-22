@@ -20,6 +20,8 @@ export interface ForgeRunOpts {
   env?: Record<string, string>;
   timeoutMs?: number;
   taskId?: string;       // For per-task log file
+  roleName?: string;     // Role name for error context
+  taskDescription?: string; // Task description for error context
 }
 
 export interface ForgeRunResult {
@@ -40,10 +42,14 @@ export async function forgeRun(opts: ForgeRunOpts): Promise<ForgeRunResult> {
     const logsDir = join(opts.workDir, 'task-logs');
     mkdirSync(logsDir, { recursive: true });
     taskLogPath = join(logsDir, `${opts.taskId}.log`);
-    appendFileSync(taskLogPath, `[${new Date().toISOString()}] Task started: ${opts.taskId}\n`);
+    const roleTag = opts.roleName ? ` (${opts.roleName})` : '';
+    appendFileSync(taskLogPath, `[${new Date().toISOString().replace('T', ' ').substring(0, 19)}] [START] Task ${opts.taskId}${roleTag} started\n`);
   }
   const taskLog = (msg: string) => {
-    if (taskLogPath) appendFileSync(taskLogPath, msg + '\n');
+    if (taskLogPath) {
+      const ts = new Date().toISOString().replace('T', ' ').substring(0, 19);
+      appendFileSync(taskLogPath, `[${ts}] ${msg}\n`);
+    }
   };
 
   const args = [
@@ -83,8 +89,16 @@ export async function forgeRun(opts: ForgeRunOpts): Promise<ForgeRunResult> {
       resolve({ output, costUsd, durationMs: Date.now() - start, success, error });
     };
 
+    const timeoutSec = (opts.timeoutMs || 3600000) / 1000;
     const timer = setTimeout(() => {
-      finish(false, `Timeout after ${(opts.timeoutMs || 3600000) / 1000}s`);
+      const elapsed = Math.round((Date.now() - start) / 1000);
+      const taskSnippet = opts.taskId ? ` [${opts.taskId}]` : '';
+      const roleSnippet = opts.roleName ? ` (${opts.roleName})` : '';
+      const descSnippet = opts.taskDescription
+        ? opts.taskDescription.substring(0, 100).replace(/\n/g, ' ')
+        : opts.userPrompt.substring(0, 100).replace(/\n/g, ' ');
+      taskLog(`[TIMEOUT] Task${taskSnippet}${roleSnippet} timed out after ${elapsed}s (limit: ${timeoutSec}s). Desc: "${descSnippet}"`);
+      finish(false, `Task${taskSnippet}${roleSnippet} timed out after ${elapsed}s (limit: ${timeoutSec}s). Desc: "${descSnippet}"`);
     }, opts.timeoutMs || 3600000);
 
     try {

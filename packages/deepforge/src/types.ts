@@ -66,6 +66,8 @@ export interface ForgeIteration {
   criticFeedback?: string;
   verifierResult?: string;
   leaderSummary?: string;
+  verifierPassed?: boolean;
+  criticCleared?: boolean;
   costUsd: number;
   startedAt: string;
   completedAt?: string;

@@ -261,6 +261,7 @@ export function registerIPCHandlers(
 
   const DEEPFORGE_DIRS = [
     join(homedir(), '.deepforge', 'projects'),
+    join(homedir(), '.forge', 'projects'),
   ];
 
   ipcMain.handle('deepforge:list', async () => {
@@ -483,15 +484,19 @@ export function registerIPCHandlers(
     try {
       const pid = parseInt(readFileSync(pidPath, 'utf-8').trim(), 10);
       if (pid > 0) {
-        // Kill entire process tree (main process + all CC child processes)
+        const { execSync } = require('node:child_process');
+        // Kill entire process group (negative PID) to catch all descendants,
+        // then fall back to pkill -P + kill for non-group-leader processes
         try {
-          const { execSync } = require('node:child_process');
-          // pkill -P kills all children first
-          execSync(`pkill -TERM -P ${pid} 2>/dev/null; kill -TERM ${pid} 2>/dev/null`, { timeout: 5000 });
+          execSync(`kill -TERM -- -${pid} 2>/dev/null || (pkill -TERM -P ${pid} 2>/dev/null; kill -TERM ${pid} 2>/dev/null)`, { timeout: 5000 });
         } catch {
-          // Fallback: just kill the main process
+          // Last resort: just kill the main process
           try { process.kill(pid, 'SIGTERM'); } catch { /* already dead */ }
         }
+        // Give processes a moment, then force kill any survivors
+        try {
+          execSync(`sleep 1; kill -9 -- -${pid} 2>/dev/null; pkill -9 -P ${pid} 2>/dev/null; kill -9 ${pid} 2>/dev/null`, { timeout: 8000 });
+        } catch { /* ignore — processes likely already dead */ }
         // Clean up pid file
         try { unlinkSync(pidPath); } catch { /* ignore */ }
         return true;

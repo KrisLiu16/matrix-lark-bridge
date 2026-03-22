@@ -31,10 +31,6 @@ export interface ForgeProject {
   chatId: string;
   noCritic?: boolean;          // 跳过 Critic（默认 false，即默认有 Critic）
   noVerifier?: boolean;        // 跳过 Verifier（默认 false）
-  // Feishu bot credentials — Leader sends iteration summaries to this chat
-  feishuAppId?: string;
-  feishuAppSecret?: string;
-  feishuApiBaseUrl?: string;   // 默认 https://open.feishu.cn
 }
 
 // ============ State ============

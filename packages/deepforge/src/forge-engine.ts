@@ -132,9 +132,6 @@ export class ForgeEngine {
         this.log(`Error: ${(err as Error).message}`);
         if (this.state.consecutiveFailures >= 3) {
           this.log('Circuit breaker — pausing');
-          this.sendFeishuSummary(this.state.currentIteration,
-            `⚠️ 项目已暂停（连续 3 次错误）\n\n错误: ${(err as Error).message}\n\n阶段: ${this.state.phase}\n迭代: ${this.state.currentIteration}`
-          ).catch(() => {});
           this.setPhase('paused');
           return;
         }
@@ -496,11 +493,6 @@ export class ForgeEngine {
 
     this.log(`Iteration ${iterNum} complete`);
     this.state.consecutiveFailures = 0;
-
-    // Send iteration summary to Feishu (non-blocking)
-    if (result.output) {
-      this.sendFeishuSummary(iterNum, result.output).catch(() => {});
-    }
 
     // Check if Leader declared project complete (anywhere in output)
     if (result.output?.includes('PROJECT_COMPLETE')) {
@@ -919,54 +911,4 @@ ${iterLog}
     return new Promise(r => setTimeout(r, ms));
   }
 
-  /** Send iteration summary to Feishu chat via bot (fire-and-forget) */
-  private async sendFeishuSummary(iterNum: number, summary: string): Promise<void> {
-    const { feishuAppId, feishuAppSecret, chatId, feishuApiBaseUrl } = this.project;
-    if (!feishuAppId || !feishuAppSecret || !chatId) return;
-
-    const baseUrl = (feishuApiBaseUrl || 'https://open.feishu.cn').replace(/\/+$/, '');
-    try {
-      // Get tenant_access_token
-      const tokenResp = await fetch(`${baseUrl}/open-apis/auth/v3/tenant_access_token/internal`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ app_id: feishuAppId, app_secret: feishuAppSecret }),
-      });
-      const tokenData = await tokenResp.json() as any;
-      if (tokenData.code !== 0) {
-        this.log(`Feishu token error: ${tokenData.msg}`);
-        return;
-      }
-
-      // Send message
-      const title = `DeepForge · ${this.project.title} · 迭代 ${iterNum}`;
-      const content = summary.substring(0, 3000);
-      await fetch(`${baseUrl}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${tokenData.tenant_access_token}`,
-        },
-        body: JSON.stringify({
-          receive_id: chatId,
-          msg_type: 'interactive',
-          content: JSON.stringify({
-            type: 'template',
-            data: {
-              template_variable: {},
-              template_id: undefined,
-            },
-            // Fallback: use raw card
-            config: { wide_screen_mode: true },
-            header: { title: { tag: 'plain_text', content: title }, template: 'blue' },
-            elements: [{ tag: 'markdown', content }],
-          }),
-        }),
-      });
-
-      this.log(`Feishu summary sent for iteration ${iterNum}`);
-    } catch (err) {
-      this.log(`Feishu send failed: ${(err as Error).message}`);
-    }
-  }
 }

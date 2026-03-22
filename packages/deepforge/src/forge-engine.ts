@@ -463,7 +463,7 @@ export class ForgeEngine {
       if (iter) iter.verifierPassed = false;
       this.log('⚠️ Verifier produced empty output (crash/timeout) — treating as failed');
     } else {
-      hasVerifierIssues = /❌|FALSE|BLOCKED|阻断|blocked by|验证失败|校验失败|check failed|test failed|FAIL|未修复/i.test(verifierOutput);
+      hasVerifierIssues = /❌|FALSE|BLOCKED|阻断|blocked by|验证失败|校验失败|check failed|test failed|未修复/i.test(verifierOutput);
       if (iter) iter.verifierPassed = !hasVerifierIssues;
     }
 
@@ -953,8 +953,8 @@ ${iterLog}
       const verifierContent = existsSync(verifierPath) ? readFileSync(verifierPath, 'utf-8') : '';
       const feedbackContent = existsSync(feedbackPath) ? readFileSync(feedbackPath, 'utf-8') : '';
 
-      const hasCriticIssues = /关键问题|CRITICAL|必须解决|严重/i.test(criticContent);
-      const hasVerifierIssues = /❌|FALSE|BLOCKED|阻断|blocked by|验证失败|校验失败|check failed|test failed|FAIL|未修复/i.test(verifierContent);
+      const hasCriticIssues = /关键问题|CRITICAL|必须解决|严重问题/i.test(criticContent);
+      const hasVerifierIssues = /❌|FALSE|BLOCKED|阻断|blocked by|验证失败|校验失败|check failed|test failed|未修复/i.test(verifierContent);
       const hasTimeoutWarning = /超时|timed out/i.test(feedbackContent);
 
       if (hasVerifierIssues && this.project.roles[0]) {

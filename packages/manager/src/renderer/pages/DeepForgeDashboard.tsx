@@ -831,8 +831,11 @@ function ProjectDetail({
         const latestIter = iterations[iterations.length - 1];
         const verifierResult = latestIter?.verifierResult || '';
         const criticFeedback = latestIter?.criticFeedback || '';
-        const verifierIssues = (verifierResult.match(/\u274C/g) || []).length;
-        const criticHasIssues = criticFeedback.includes('关键问题') || criticFeedback.includes('\u274C');
+        const verifierFailed = /❌|FALSE|BLOCKED|阻断|blocked by|验证失败|校验失败|check failed|test failed|未修复/i.test(verifierResult);
+        const verifierIssues = verifierFailed ? Math.max((verifierResult.match(/❌/g) || []).length, 1) : 0;
+        const criticHasIssues = /关键问题[\s\S]*?\n\s*\d+\.\s/.test(criticFeedback)
+          || /CRITICAL|严重问题/i.test(criticFeedback)
+          || /必须解决[：:]/.test(criticFeedback);
         const hasIssues = verifierIssues > 0 || criticHasIssues;
         const parts: string[] = [];
         if (verifierIssues > 0) parts.push(`Verifier 发现 ${verifierIssues} 个未解决问题`);
@@ -1286,8 +1289,10 @@ function IterationsPanel({ iterations }: { iterations: any[] }) {
           const isExpanded = expandedIter === realIdx;
           const verifierResult = iter.verifierResult || '';
           const criticFeedback = iter.criticFeedback || '';
-          const hasVerifierIssue = verifierResult.includes('\u274C');
-          const hasCriticIssue = criticFeedback.includes('\u5173\u952E\u95EE\u9898') || criticFeedback.includes('\u274C');
+          const hasVerifierIssue = /❌|FALSE|BLOCKED|阻断|blocked by|验证失败|校验失败|check failed|test failed|未修复/i.test(verifierResult);
+          const hasCriticIssue = /关键问题[\s\S]*?\n\s*\d+\.\s/.test(criticFeedback)
+            || /CRITICAL|严重问题/i.test(criticFeedback)
+            || /必须解决[：:]/.test(criticFeedback);
           const verifierOk = verifierResult && !hasVerifierIssue;
           const criticOk = criticFeedback && !hasCriticIssue;
 

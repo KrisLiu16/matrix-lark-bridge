@@ -46,7 +46,7 @@ if (values.help && positionals.length === 0) {
 
   启动一个 AI 团队，自主迭代完成复杂任务。
   每个角色是独立的 Claude Code 进程，并行执行。
-  框架强制 3 个角色：Leader（规划）、Critic（找问题）、Verifier（核查）。
+  框架强制 4 个角色：Leader（规划）、Critic（找问题）、Verifier（核查）、Packager（整理产出）。
 
   命令:
     deepforge start --config <path>      启动项目（从配置文件）

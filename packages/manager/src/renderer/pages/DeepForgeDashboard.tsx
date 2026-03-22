@@ -835,7 +835,7 @@ function ProjectDetail({
         const verifierIssues = verifierFailed ? Math.max((verifierResult.match(/❌/g) || []).length, 1) : 0;
         const criticHasIssues = /关键问题[\s\S]*?\n\s*\d+\.\s/.test(criticFeedback)
           || /CRITICAL|严重问题/i.test(criticFeedback)
-          || /必须解决[：:]/.test(criticFeedback);
+          || /必须解决[：:]\s*\n\s*\d+\./m.test(criticFeedback);
         const hasIssues = verifierIssues > 0 || criticHasIssues;
         const parts: string[] = [];
         if (verifierIssues > 0) parts.push(`Verifier 发现 ${verifierIssues} 个未解决问题`);
@@ -1292,7 +1292,7 @@ function IterationsPanel({ iterations }: { iterations: any[] }) {
           const hasVerifierIssue = /❌|FALSE|BLOCKED|阻断|blocked by|验证失败|校验失败|check failed|test failed|未修复/i.test(verifierResult);
           const hasCriticIssue = /关键问题[\s\S]*?\n\s*\d+\.\s/.test(criticFeedback)
             || /CRITICAL|严重问题/i.test(criticFeedback)
-            || /必须解决[：:]/.test(criticFeedback);
+            || /必须解决[：:]\s*\n\s*\d+\./m.test(criticFeedback);
           const verifierOk = verifierResult && !hasVerifierIssue;
           const criticOk = criticFeedback && !hasCriticIssue;
 

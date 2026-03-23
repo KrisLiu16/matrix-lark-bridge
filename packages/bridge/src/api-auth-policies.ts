@@ -225,6 +225,16 @@ export const API_AUTH_POLICIES: ApiAuthPolicy[] = [
     description: 'Mail APIs — user preferred, tenant fallback',
   },
 
+  // ── Hire: Tenant only ──
+  // 招聘 API 只支持 tenant token
+  {
+    pattern: /\/hire\/v1\//,
+    preferred: 'tenant',
+    fallback: false,
+    scopes: [],
+    description: 'Hire APIs — tenant only',
+  },
+
   // ── Approval: Tenant only ──
   // 审批 API 全部使用 tenant token（管理视角）
   {

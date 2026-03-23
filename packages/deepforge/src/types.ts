@@ -35,6 +35,7 @@ export interface ForgeProject {
 
 // ============ State ============
 
+/** @deprecated Use `import type { ForgePhase } from './types/middleware'` instead */
 export type ForgePhase =
   | 'setup'         // Leader designs team (only iteration 0)
   | 'planning'      // Leader plans this iteration
@@ -46,6 +47,7 @@ export type ForgePhase =
   | 'paused'
   | 'completed';
 
+/** @deprecated Use `import type { ForgeTask } from './types/dashboard'` instead */
 export interface ForgeTask {
   id: string;
   role: string;
@@ -85,6 +87,7 @@ export interface ForgeState {
 
 // ============ Events ============
 
+/** @deprecated Use `import type { ForgeEvent } from './types/event'` instead */
 export interface ForgeEvent {
   type: 'phase' | 'task_start' | 'task_done' | 'task_fail' | 'critic' | 'alert';
   message: string;
@@ -103,3 +106,7 @@ export interface ForgeEvent {
 export * from './types/config';
 export * from './types/memory';
 export * from './types/quality';
+
+// Aliased re-exports for v2 conflicting types — use these for gradual migration
+export { ForgeEvent as ForgeEventV2 } from './types/event';
+export { ForgePhase as ForgePhaseV2 } from './types/middleware';

@@ -23,7 +23,7 @@ import type {
 // v2 subsystems
 import type { ForgeConfig } from './types/config';
 import type { ForgeEvent as ForgeEventV2 } from './types/event';
-import type { MiddlewareContext } from './types/middleware';
+import type { MiddlewareContext, MiddlewareResult } from './types/middleware';
 import { createForgeSubsystems, destroyForgeSubsystems, type ForgeSubsystems } from './forge-engine-adapter.js';
 import { DEFAULT_CONFIG } from './forge-config.js';
 import { createForgeEvent } from './forge-events.js';
@@ -339,7 +339,26 @@ export class ForgeEngine {
     this.log(`Executing ${pending.length} tasks in parallel (max ${this.project.maxConcurrent} concurrent)...`);
 
     // Run middleware pipeline before task execution (context enrichment, loop detection, etc.)
-    await this.runPipeline('executing');
+    const pipelineResult = await this.runPipeline('executing');
+
+    // If a blocking middleware (quality-gate, loop-detection) failed, skip execution
+    if (pipelineResult && !pipelineResult.success) {
+      const blockingStep = pipelineResult.steps.find(
+        s => (s.name === 'quality-gate' || s.name === 'loop-detection') && (s.status === 'error' || s.status === 'timeout'),
+      );
+      if (blockingStep) {
+        this.log(`Blocking middleware failure: ${blockingStep.name} — ${blockingStep.error}. Skipping task execution.`);
+        void this.subsystems.eventBus.emit(createForgeEvent({
+          type: 'middleware_error' as const,
+          message: `Pipeline blocked execution: ${blockingStep.name} — ${blockingStep.error}`,
+          middlewareName: blockingStep.name,
+          error: blockingStep.error ?? 'pipeline blocked',
+          recovered: false,
+        }));
+        this.setPhase('iterating');
+        return;
+      }
+    }
 
     // Update semaphore capacity to match project config
     this.subsystems.semaphore.updateMax(this.project.maxConcurrent);
@@ -587,7 +606,19 @@ export class ForgeEngine {
     if (!result.success) this.reportTaskError(task, result.error);
 
     // Run middleware pipeline after verification (quality gate, summarization, artifact tracking)
-    await this.runPipeline('verifying');
+    const verifyPipelineResult = await this.runPipeline('verifying');
+
+    // If a blocking middleware failed during verification, mark verifier as failed
+    if (verifyPipelineResult && !verifyPipelineResult.success) {
+      const blockingStep = verifyPipelineResult.steps.find(
+        s => (s.name === 'quality-gate' || s.name === 'loop-detection') && (s.status === 'error' || s.status === 'timeout'),
+      );
+      if (blockingStep) {
+        this.log(`Post-verification pipeline failure: ${blockingStep.name} — ${blockingStep.error}`);
+        const iter = this.currentIter();
+        if (iter) iter.verifierPassed = false;
+      }
+    }
 
     this.setPhase('iterating');
   }
@@ -839,16 +870,33 @@ ${iterLog}
       name: 'summarization', priority: 70, continueOnError: true, timeout: 10_000,
     });
 
-    // 5. Quality gate (priority 110) — validates quality criteria
+    // 5. Quality gate (priority 110) — validates quality criteria (blocking: failure halts pipeline)
     const qualityGate = new QualityGateMiddleware();
     pipeline.use(qualityGate.execute.bind(qualityGate), {
-      name: 'quality-gate', priority: 110, continueOnError: true, timeout: 60_000,
+      name: 'quality-gate', priority: 110, continueOnError: false, timeout: 60_000,
     });
 
-    // 6. Loop detection (priority 115) — detects repeated patterns
+    // 6. Loop detection (priority 115) — detects repeated patterns (blocking: failure halts pipeline)
     const loopDetection = new LoopDetectionMiddleware();
     pipeline.use(loopDetection.execute.bind(loopDetection), {
-      name: 'loop-detection', priority: 115, continueOnError: true,
+      name: 'loop-detection', priority: 115, continueOnError: false,
+    });
+
+    // Register iteration lifecycle hooks so fireBeforeIteration/fireAfterIteration are not no-ops
+    pipeline.onBeforeIteration(async (ctx) => {
+      const iterNum = ctx.config.iteration ?? this.state.currentIteration;
+      this.log(`[pipeline] beforeIteration: iteration ${iterNum}, ${ctx.iteration?.taskCount ?? 0} tasks planned`);
+      // Reset per-iteration pipeline state
+      ctx.state.iterationStartedAt = new Date().toISOString();
+      ctx.state.pipelinePhase = 'pre-execution';
+    });
+
+    pipeline.onAfterIteration(async (ctx) => {
+      const iterNum = ctx.config.iteration ?? this.state.currentIteration;
+      const completed = ctx.iteration?.completedCount ?? 0;
+      const failed = ctx.iteration?.failedCount ?? 0;
+      const total = ctx.iteration?.taskCount ?? 0;
+      this.log(`[pipeline] afterIteration: iteration ${iterNum}, ${completed}/${total} completed, ${failed} failed`);
     });
 
     this.log(`Registered ${pipeline.size} middleware: ${pipeline.chain.join(', ')}`);
@@ -880,13 +928,13 @@ ${iterLog}
     });
   }
 
-  /** Run the middleware pipeline for a given phase. Errors are logged but don't block the engine. */
-  private async runPipeline(phase: string): Promise<void> {
+  /** Run the middleware pipeline for a given phase. Returns the result so callers can react to failures. */
+  private async runPipeline(phase: string): Promise<MiddlewareResult | null> {
     const ctx = this.buildMiddlewareContext(phase);
     try {
       const result = await this.subsystems.pipeline.execute(ctx);
       if (!result.success) {
-        this.log(`Pipeline warning (${phase}): ${result.error || 'partial failure'}`);
+        this.log(`Pipeline halted (${phase}): ${result.error || result.shortCircuitedBy || 'middleware failure'}`);
       }
       // Log middleware step results
       for (const step of result.steps) {
@@ -894,8 +942,10 @@ ${iterLog}
           this.log(`  middleware ${step.name}: ${step.status} (${step.durationMs}ms) — ${step.error}`);
         }
       }
+      return result;
     } catch (err) {
       this.log(`Pipeline error (${phase}): ${(err as Error).message}`);
+      return null;
     }
   }
 

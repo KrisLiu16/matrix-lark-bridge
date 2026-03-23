@@ -6,6 +6,8 @@ export type {
   FeishuQRInit,
   FeishuCredentials,
   FeishuValidation,
+  WechatChannelState,
+  WechatConfig,
   IPCChannels,
 } from './types.js';
 

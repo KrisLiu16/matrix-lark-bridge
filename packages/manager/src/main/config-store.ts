@@ -83,8 +83,17 @@ export class ConfigStore {
       errors.push('name must contain only letters, numbers, hyphens, and underscores');
     }
 
-    if (!config.app_id?.trim()) errors.push('app_id is required');
-    if (!config.app_secret?.trim()) errors.push('app_secret is required');
+    // At least one platform must be configured (Feishu or WeChat)
+    const hasFeishu = !!(config.app_id?.trim() && config.app_secret?.trim());
+    const hasWechat = !!config.wechat?.bot_token;
+    if (!hasFeishu && !hasWechat) {
+      errors.push('至少需要配置一个平台（飞书或微信）');
+    }
+    // If Feishu fields are partially filled, require both
+    if ((config.app_id?.trim() && !config.app_secret?.trim()) ||
+        (!config.app_id?.trim() && config.app_secret?.trim())) {
+      errors.push('飞书 app_id 和 app_secret 必须同时填写');
+    }
     if (!config.work_dir?.trim()) errors.push('work_dir is required');
 
     if (config.claude?.mode) {

@@ -1,17 +1,19 @@
 {
   "name": "@mlb/bridge",
-  "version": "0.8.4",
+  "version": "0.9.0",
   "type": "module",
   "bin": {
     "mlb-bridge": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc && cp -r src/skills dist/skills",
-    "dev": "tsx src/index.ts"
+    "dev": "tsx src/index.ts",
+    "test": "tsx --test tests/wechat/*.test.ts"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.59.0",
     "@mlb/shared": "workspace:*",
+    "@mlb/wechat-sdk": "workspace:*",
     "ogg-opus-decoder": "^1.7.3"
   },
   "devDependencies": {

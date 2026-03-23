@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { BridgeConfig, BridgeStatus, SessionState, FeishuQRInit, FeishuCredentials, FeishuValidation } from '@mlb/shared';
+import type { StatusPayload } from '../shared/wechat-types.js';
 
 const api = {
   bridge: {
@@ -74,6 +75,19 @@ const api = {
       ipcRenderer.invoke('deepforge:set-config', projectId, key, value),
     attach: (projectId: string, taskId: string): Promise<void> =>
       ipcRenderer.invoke('deepforge:attach', projectId, taskId),
+  },
+  wechat: {
+    login: (): Promise<{ qrcodeUrl: string }> => ipcRenderer.invoke('wechat:login'),
+    status: (): Promise<StatusPayload> => ipcRenderer.invoke('wechat:status'),
+    logout: (): Promise<void> => ipcRenderer.invoke('wechat:logout'),
+    cancel: (): Promise<void> => ipcRenderer.invoke('wechat:cancel'),
+    getToken: (): Promise<{ botToken: string; ilinkBotId: string; baseUrl?: string; userId?: string } | null> =>
+      ipcRenderer.invoke('wechat:getToken'),
+    onStatusUpdate: (callback: (payload: StatusPayload) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: StatusPayload) => callback(payload);
+      ipcRenderer.on('wechat:status-update', handler);
+      return () => { ipcRenderer.removeListener('wechat:status-update', handler); };
+    },
   },
   claude: {
     check: (): Promise<{ installed: boolean; version?: string; path?: string }> =>

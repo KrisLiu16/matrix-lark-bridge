@@ -12,6 +12,7 @@ import { AutoStartManager } from './auto-start.js';
 import { FeishuSetup } from './feishu-setup.js';
 import { ClaudeSetup } from './claude-setup.js';
 import { registerIPCHandlers } from './ipc-handlers.js';
+import { registerWeChatIPC, setOnLoginSuccess } from './wechat-ipc.js';
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -140,6 +141,16 @@ app.whenReady().then(async () => {
 
   // Register IPC handlers
   registerIPCHandlers(processManager, configStore, autoStart, feishuSetup, claudeSetup, () => mainWindow);
+
+  // Register WeChat IPC handlers
+  registerWeChatIPC(() => mainWindow);
+
+  // WeChat login success: just log — token is persisted by wechat-ipc.
+  // Bridge binding is separate: each bridge can opt-in to wechat in its own config.
+  // Do NOT restart all bridges here.
+  setOnLoginSuccess(async (info) => {
+    console.log(`[wechat] login success: bot_id=${info.ilinkBotId}, token saved`);
+  });
 
   // IPC handler for tray bridge count
   ipcMain.handle('app:get-running-count', async () => {

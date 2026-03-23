@@ -15,7 +15,8 @@
     "composite": true
   },
   "references": [
-    { "path": "../shared" }
+    { "path": "../shared" },
+    { "path": "../wechat-sdk" }
   ],
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]

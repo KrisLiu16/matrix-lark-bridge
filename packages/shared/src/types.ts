@@ -2,9 +2,9 @@
 
 export interface BridgeConfig {
   name: string;
-  app_id: string;
-  app_secret: string;
-  api_base_url: string;
+  app_id?: string;       // Required only when Feishu is enabled
+  app_secret?: string;   // Required only when Feishu is enabled
+  api_base_url?: string;
   work_dir: string;
   claude: {
     mode: 'default' | 'acceptEdits' | 'bypassPermissions';
@@ -29,6 +29,7 @@ export interface BridgeConfig {
   auto_start: boolean;
   bot_name?: string;
   max_queue?: number; // Max queued messages (default 5, 0 = no queue)
+  wechat?: WechatConfig;
 }
 
 // --- Bridge Status (runtime, computed by Manager) ---
@@ -87,6 +88,33 @@ export interface FeishuValidation {
   error?: string;
 }
 
+// --- WeChat Channel ---
+
+/** WeChat channel lifecycle states. */
+export type WechatChannelState =
+  | 'disconnected'   // No bot_token, not connected
+  | 'scanning'       // QR code generated, waiting for scan
+  | 'scanned'        // User scanned QR but not yet confirmed
+  | 'connected'      // bot_token valid, long-polling active
+  | 'reconnecting'   // Transient error, attempting reconnect
+  | 'expired';       // Session expired (errcode -14), needs re-scan
+
+/** WeChat channel configuration — stored alongside feishu config in BridgeConfig. */
+export interface WechatConfig {
+  /** iLink Bot bearer token, obtained after QR scan. */
+  bot_token: string;
+  /** iLink Bot ID returned with bot_token. */
+  ilink_bot_id: string;
+  /** Current channel state. */
+  state: WechatChannelState;
+  /** ISO-8601 timestamp of last successful getUpdates. */
+  last_active?: string;
+  /** Cached QR code URL during scanning phase. */
+  qrcode_url?: string;
+  /** Auto-reconnect on session expiry (default true). */
+  auto_reconnect?: boolean;
+}
+
 // --- Electron IPC Protocol ---
 
 export interface IPCChannels {
@@ -111,6 +139,22 @@ export interface IPCChannels {
   'feishu:init-qr': () => FeishuQRInit;
   'feishu:poll-qr': (deviceCode: string) => FeishuCredentials | null;
   'feishu:validate': (appId: string, appSecret: string) => FeishuValidation;
+
+  // WeChat setup
+  'wechat:login': () => { qrcodeUrl: string };
+  'wechat:status': () => {
+    status: WechatChannelState;
+    bot?: { ilinkBotId: string; userId?: string; wxid?: string; nickname?: string };
+    error?: string;
+    qrcodeUrl?: string;
+    refreshCount?: number;
+    lastHeartbeat?: number;
+    connectedSince?: number;
+    stats?: { received: number; sent: number };
+  };
+  'wechat:logout': () => void;
+  'wechat:cancel': () => void;
+  'wechat:getToken': () => { botToken: string; ilinkBotId: string; baseUrl?: string; userId?: string } | null;
 
   // Auto-start
   'autostart:enable': (name: string) => void;

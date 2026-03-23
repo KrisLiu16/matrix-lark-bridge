@@ -1,7 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import type { BridgeConfig } from '@mlb/shared';
+import type { BridgeConfig, WechatChannelState } from '@mlb/shared';
 import { CONFIG_FILE, DEFAULT_BRIDGE_CONFIG } from '@mlb/shared';
 
 // Re-export for bridge modules
@@ -50,6 +50,7 @@ export function loadConfig(workspace: string): BridgeConfig {
   if (typeof parsed.bot_name === 'string') cfg.bot_name = parsed.bot_name;
   if (typeof parsed.api_base_url === 'string') cfg.api_base_url = parsed.api_base_url.replace(/\/+$/, '');
   if (typeof parsed.auto_start === 'boolean') cfg.auto_start = parsed.auto_start;
+  if (typeof parsed.max_queue === 'number' && parsed.max_queue >= 1) cfg.max_queue = parsed.max_queue;
 
   const VALID_CLAUDE_MODES = ['default', 'acceptEdits', 'bypassPermissions'] as const;
 
@@ -66,6 +67,16 @@ export function loadConfig(workspace: string): BridgeConfig {
     if (Array.isArray(claude.allowed_tools)) {
       cfg.claude.allowed_tools = claude.allowed_tools as string[];
     }
+    const VALID_EFFORTS = ['low', 'medium', 'high', 'max'] as const;
+    if (typeof claude.effort === 'string' && (VALID_EFFORTS as readonly string[]).includes(claude.effort)) {
+      cfg.claude.effort = claude.effort as BridgeConfig['claude']['effort'];
+    }
+    if (typeof claude.context_limit === 'number' && claude.context_limit > 0) {
+      cfg.claude.context_limit = claude.context_limit;
+    }
+    if (claude.env && typeof claude.env === 'object' && !Array.isArray(claude.env)) {
+      cfg.claude.env = claude.env as BridgeConfig['claude']['env'];
+    }
   }
 
   const sp = parsed.stream_preview as Record<string, unknown> | undefined;
@@ -76,8 +87,26 @@ export function loadConfig(workspace: string): BridgeConfig {
     if (typeof sp.max_chars === 'number') cfg.stream_preview.max_chars = sp.max_chars;
   }
 
-  if (!cfg.app_id || !cfg.app_secret) {
-    throw new Error('app_id and app_secret are required in config');
+  // WeChat config (optional — feishu-only setups omit this)
+  const VALID_WECHAT_STATES: readonly WechatChannelState[] = ['disconnected', 'scanning', 'scanned', 'connected', 'reconnecting', 'expired'];
+  const wc = parsed.wechat as Record<string, unknown> | undefined;
+  if (wc) {
+    const wechatState: WechatChannelState =
+      typeof wc.state === 'string' && (VALID_WECHAT_STATES as readonly string[]).includes(wc.state)
+        ? (wc.state as WechatChannelState)
+        : 'disconnected';
+    cfg.wechat = {
+      bot_token: typeof wc.bot_token === 'string' ? wc.bot_token : '',
+      ilink_bot_id: typeof wc.ilink_bot_id === 'string' ? wc.ilink_bot_id : '',
+      state: wechatState,
+      last_active: typeof wc.last_active === 'string' ? wc.last_active : undefined,
+      qrcode_url: typeof wc.qrcode_url === 'string' ? wc.qrcode_url : undefined,
+      auto_reconnect: typeof wc.auto_reconnect === 'boolean' ? wc.auto_reconnect : true,
+    };
+  }
+
+  if (!cfg.wechat && (!cfg.app_id || !cfg.app_secret)) {
+    throw new Error('app_id and app_secret are required when wechat channel is not configured');
   }
   return cfg;
 }

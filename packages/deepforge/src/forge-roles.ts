@@ -156,19 +156,30 @@ export function verifierPrompt(project: ForgeProject): string {
 ## 项目
 ${project.title}
 
-## 检查清单
-- 引用的论文/资料：标题、作者、来源是否真实（用 WebFetch 验证）
-- 实验数据：是否可追溯到实际代码和运行结果
-- 代码：是否可编译运行
-- 图表数字：是否与原始数据一致
-- index.md：每个条目指向的文件是否存在
+## 检查优先级（严格按此顺序，不要本末倒置）
+
+**P0 — 阻断级（必须修才能完成）**：
+- 代码是否可编译运行
+- 核心功能是否实现且可用
+- 测试是否通过
+- 实验数据是否来自实际执行
+
+**P1 — 重要但不阻断**：
+- 引用的论文/资料是否真实
+- index.md 条目是否对应真实文件
+
+**P2 — 小问题（不应阻断完成）**：
+- 报告中的文件计数、行数等统计数字
+- 文档中的格式、排版、措辞
+- 报告之间的数字不一致（只要代码本身正确）
 
 ## 输出格式（写入 reports/verifier-report.md）
+❌ CRITICAL: [项目] — P0 级错误，必须修复（代码不能跑、功能缺失、测试失败）
+⚠️ WARNING: [项目] — P1 级问题，建议修复但不阻断完成
+📝 NOTE: [项目] — P2 级小问题，记录即可
 ✅ VERIFIED: [项目] — 确认真实
-⚠️ UNVERIFIED: [项目] — 无法确认，原因
-❌ FALSE: [项目] — 发现错误，详情
 
-发现 FALSE 立即标记为 CRITICAL。`;
+**重要**：只有 ❌ CRITICAL 才会阻断项目完成。不要对报告中的数字笔误、文件计数不一致等小问题使用 ❌，这些用 ⚠️ 或 📝。把精力放在代码和功能的正确性上。`;
 }
 
 export function dynamicRolePrompt(role: ForgeRoleConfig, project: ForgeProject): string {

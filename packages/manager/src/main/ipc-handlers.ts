@@ -62,6 +62,18 @@ export function registerIPCHandlers(
     if (errors.length > 0) {
       throw new Error(`Invalid config: ${errors.join(', ')}`);
     }
+    // Enforce single WeChat binding: if this bridge has wechat, unbind others
+    if (config.wechat?.bot_token) {
+      for (const other of configStore.listNames()) {
+        try {
+          const otherCfg = configStore.readConfig(other);
+          if (otherCfg.wechat?.bot_token) {
+            configStore.writeConfig(other, { ...otherCfg, wechat: undefined });
+            console.log(`[ipc] unbound wechat from "${other}" (new bridge "${config.name}" takes over)`);
+          }
+        } catch { /* skip */ }
+      }
+    }
     await processManager.createBridge(config);
   });
 
@@ -75,7 +87,21 @@ export function registerIPCHandlers(
   });
 
   ipcMain.handle('bridge:update-config', async (_event, name: string, updates: Partial<BridgeConfig>) => {
-    configStore.updateConfig(validateBridgeName(name), updates);
+    const validName = validateBridgeName(name);
+    // Enforce single WeChat binding on update
+    if (updates.wechat?.bot_token) {
+      for (const other of configStore.listNames()) {
+        if (other === validName) continue;
+        try {
+          const otherCfg = configStore.readConfig(other);
+          if (otherCfg.wechat?.bot_token) {
+            configStore.writeConfig(other, { ...otherCfg, wechat: undefined });
+            console.log(`[ipc] unbound wechat from "${other}" (bridge "${validName}" takes over)`);
+          }
+        } catch { /* skip */ }
+      }
+    }
+    configStore.updateConfig(validName, updates);
   });
 
   ipcMain.handle('bridge:read-config', async (_event, name: string) => {

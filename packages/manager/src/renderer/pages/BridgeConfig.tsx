@@ -93,9 +93,9 @@ export default function BridgeConfig({ name }: BridgeConfigProps) {
         {/* Feishu Credentials */}
         <Section title={t('config.feishu')}>
           <div className="space-y-3">
-            <Field label={t('config.feishu.appId')} value={config.app_id} onChange={(v) => updateField('app_id', v)} />
-            <Field label={t('config.feishu.appSecret')} value={config.app_secret} onChange={(v) => updateField('app_secret', v)} type="password" />
-            <Field label={t('config.feishu.apiBase')} value={config.api_base_url} onChange={(v) => updateField('api_base_url', v)} />
+            <Field label={t('config.feishu.appId')} value={config.app_id || ''} onChange={(v) => updateField('app_id', v || undefined)} />
+            <Field label={t('config.feishu.appSecret')} value={config.app_secret || ''} onChange={(v) => updateField('app_secret', v || undefined)} type="password" />
+            <Field label={t('config.feishu.apiBase')} value={config.api_base_url || 'https://open.feishu.cn'} onChange={(v) => updateField('api_base_url', v)} />
           </div>
 
           <button
@@ -253,6 +253,9 @@ export default function BridgeConfig({ name }: BridgeConfigProps) {
           </div>
         </Section>
 
+        {/* WeChat Binding */}
+        <WechatBindingSection config={config} onUpdate={(wechat) => updateField('wechat', wechat)} />
+
         {/* Save */}
         <div className="flex gap-3">
           <button
@@ -283,6 +286,84 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-4">{title}</h2>
       {children}
     </section>
+  );
+}
+
+function WechatBindingSection({ config, onUpdate }: { config: BridgeConfigType; onUpdate: (wechat: BridgeConfigType['wechat']) => void }) {
+  const [wechatToken, setWechatToken] = React.useState<{ botToken: string; ilinkBotId: string; baseUrl?: string; userId?: string } | null>(null);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    window.mlb.wechat.getToken().then((token) => {
+      setWechatToken(token);
+      setLoading(false);
+    });
+  }, []);
+
+  const isBound = !!config.wechat?.bot_token;
+
+  function handleBind() {
+    if (!wechatToken) return;
+    onUpdate({
+      bot_token: wechatToken.botToken,
+      ilink_bot_id: wechatToken.ilinkBotId,
+      state: 'connected' as const,
+      last_active: new Date().toISOString(),
+    });
+  }
+
+  function handleUnbind() {
+    onUpdate(undefined);
+  }
+
+  if (loading) return null;
+
+  return (
+    <Section title="微信接入">
+      {isBound ? (
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 text-lg">
+              &#x2713;
+            </span>
+            <div>
+              <p className="text-sm font-medium text-slate-700 dark:text-slate-300">已绑定微信</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 break-all">Bot ID: {config.wechat!.ilink_bot_id}</p>
+            </div>
+          </div>
+          <button
+            onClick={handleUnbind}
+            className="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors
+              bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400
+              hover:bg-red-100 dark:hover:bg-red-900/40"
+          >
+            解除绑定
+          </button>
+        </div>
+      ) : wechatToken ? (
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm text-slate-600 dark:text-slate-400">微信已登录，可绑定到此 Bridge</p>
+            <p className="text-xs text-slate-400 dark:text-slate-500 break-all">Bot ID: {wechatToken.ilinkBotId}</p>
+          </div>
+          <button
+            onClick={handleBind}
+            className="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors
+              bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400
+              hover:bg-green-100 dark:hover:bg-green-900/40"
+          >
+            绑定微信
+          </button>
+        </div>
+      ) : (
+        <p className="text-sm text-slate-500 dark:text-slate-400">
+          微信未登录 — 请先在左侧「微信」页面扫码登录
+        </p>
+      )}
+      <p className="mt-2 text-xs text-slate-400 dark:text-slate-500">
+        绑定后需点击「保存」生效。同一时间仅一个 Bridge 可绑定微信。
+      </p>
+    </Section>
   );
 }
 

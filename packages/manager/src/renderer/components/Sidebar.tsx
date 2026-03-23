@@ -3,6 +3,7 @@ import { useBridgeStore } from '../stores/bridge-store';
 import { useI18n } from '../i18n';
 import StatusBadge from './StatusBadge';
 import Modal from './Modal';
+import SidebarWeChatEntry from './wechat/SidebarWeChatEntry';
 
 function formatUptime(seconds?: number): string {
   if (!seconds) return '';
@@ -83,6 +84,14 @@ export default function Sidebar() {
             </svg>
             DeepForge
           </button>
+        </div>
+
+        {/* WeChat link */}
+        <div className="px-3 pb-2">
+          <SidebarWeChatEntry
+            active={currentPage === 'wechat'}
+            onClick={() => navigate('wechat')}
+          />
         </div>
 
         {/* Bridge list */}

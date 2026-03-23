@@ -178,7 +178,7 @@ export class Gateway {
   constructor(config: BridgeConfig, workspace: string) {
     this.config = config;
     this.workspace = workspace;
-    this.feishu = new FeishuClient(config.app_id, config.app_secret, config.api_base_url, config.work_dir);
+    this.feishu = new FeishuClient(config.app_id!, config.app_secret!, config.api_base_url || 'https://open.feishu.cn', config.work_dir);
     this.store = new SessionStore(workspace, config.work_dir);
     this.botName = config.bot_name || 'MiniMax AI';
     // Restore persisted settings from session state
@@ -482,9 +482,9 @@ export class Gateway {
         command: process.execPath,
         args: [process.argv[1], 'mcp'],
         env: {
-          LARK_APP_ID: this.config.app_id,
-          LARK_APP_SECRET: this.config.app_secret,
-          LARK_API_BASE_URL: this.config.api_base_url,
+          LARK_APP_ID: this.config.app_id!,
+          LARK_APP_SECRET: this.config.app_secret!,
+          LARK_API_BASE_URL: this.config.api_base_url || 'https://open.feishu.cn',
           MLB_WORKSPACE: this.workspace,
           // User context (set at session startup, real-time context via message prefix)
           MLB_SENDER_OPEN_ID: this.lastSenderInfo?.openId || '',
@@ -541,7 +541,7 @@ export class Gateway {
           workDir: state.workDir,
           mode: this.config.claude.mode,
           model: this.config.claude.model,
-        effort: this.config.claude.effort,
+          effort: this.config.claude.effort,
           allowedTools: this.config.claude.allowed_tools,
           systemPrompt,
           mcpServers,
@@ -1167,15 +1167,15 @@ export class Gateway {
 
           // Step 1: Get device code + auth link
           const device = await requestDeviceAuthorization(
-            this.config.app_id, this.config.app_secret, this.config.api_base_url,
+            this.config.app_id!, this.config.app_secret!, this.config.api_base_url || 'https://open.feishu.cn',
           );
           const authMsgId = await this.feishu.sendCard(chatId, buildAuthCard(device.verificationUriComplete));
 
           // Step 2: Poll until user authorizes (no redirect, no paste needed)
           const tokens = await pollDeviceToken(
-            this.config.app_id, this.config.app_secret,
+            this.config.app_id!, this.config.app_secret!,
             device.deviceCode, device.interval, device.expiresIn,
-            this.config.api_base_url,
+            this.config.api_base_url || 'https://open.feishu.cn',
           );
 
           if (!tokens) {
@@ -1261,15 +1261,15 @@ export class Gateway {
       const { saveTokens } = await import('./auth/token-store.js');
 
       const device = await requestDeviceAuthorization(
-        this.config.app_id, this.config.app_secret, this.config.api_base_url,
+        this.config.app_id!, this.config.app_secret!, this.config.api_base_url || 'https://open.feishu.cn',
       );
       const authMsgId = await this.feishu.sendCard(chatId, buildAuthCard(device.verificationUriComplete));
 
       // Poll until user authorizes (no paste needed)
       const tokens = await pollDeviceToken(
-        this.config.app_id, this.config.app_secret,
+        this.config.app_id!, this.config.app_secret!,
         device.deviceCode, device.interval, device.expiresIn,
-        this.config.api_base_url,
+        this.config.api_base_url || 'https://open.feishu.cn',
       );
 
       if (!tokens) {

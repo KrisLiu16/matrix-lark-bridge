@@ -1,4 +1,5 @@
 import type { BridgeConfig, BridgeStatus, SessionState, FeishuQRInit, FeishuCredentials, FeishuValidation } from '@mlb/shared';
+import type { StatusPayload } from '../shared/wechat-types';
 
 interface MlbAPI {
   bridge: {
@@ -50,9 +51,18 @@ interface MlbAPI {
     delete(projectId: string): Promise<void>;
     inject(projectId: string, message: string): Promise<void>;
     package(projectId: string): Promise<{ path: string }>;
+    packageStop(projectId: string): Promise<void>;
     onPackageProgress(callback: (data: { projectId: string; step: string }) => void): () => void;
     setConfig(projectId: string, key: string, value: any): Promise<void>;
     attach(projectId: string, taskId: string): Promise<void>;
+  };
+  wechat: {
+    login(): Promise<{ qrcodeUrl: string }>;
+    status(): Promise<StatusPayload>;
+    logout(): Promise<void>;
+    cancel(): Promise<void>;
+    getToken(): Promise<{ botToken: string; ilinkBotId: string; baseUrl?: string; userId?: string } | null>;
+    onStatusUpdate(callback: (payload: StatusPayload) => void): () => void;
   };
   system: {
     getWorkspaceRoot(): Promise<string>;
@@ -64,6 +74,14 @@ interface MlbAPI {
     }>;
     openUrl(url: string): Promise<void>;
   };
+  claude: {
+    check(): Promise<{ installed: boolean; version?: string; path?: string }>;
+    install(): Promise<{ installed: boolean; version?: string; path?: string }>;
+    uninstall(): Promise<{ success: boolean; removed: string[] }>;
+  };
+  onClaudeSetupProgress(callback: (progress: {
+    step: number; totalSteps: number; status: string; label: string; detail?: string; error?: string;
+  }) => void): () => void;
   onLogLine(callback: (data: { name: string; line: string }) => void): () => void;
 }
 

@@ -463,7 +463,8 @@ export class ForgeEngine {
       if (iter) iter.verifierPassed = false;
       this.log('⚠️ Verifier produced empty output (crash/timeout) — treating as failed');
     } else {
-      hasVerifierIssues = /❌|FALSE|BLOCKED|阻断|blocked by|验证失败|校验失败|check failed|test failed|未修复/i.test(verifierOutput);
+      // Only CRITICAL issues block completion — warnings and notes don't
+      hasVerifierIssues = /❌\s*CRITICAL|CRITICAL.*❌|编译失败|compile.*(fail|error)|test.*fail|测试失败|功能缺失|代码不能跑/i.test(verifierOutput);
       if (iter) iter.verifierPassed = !hasVerifierIssues;
     }
 
@@ -506,7 +507,7 @@ export class ForgeEngine {
       taskId: task.id,
       roleName: 'leader',
       taskDescription: task.description,
-      timeoutMs: 5 * 60 * 1000, // Leader iterate: 5 min max (summarize + decide, not execute)
+      timeoutMs: 60 * 60 * 1000, // 1 hour — same as all other roles
     });
 
     task.status = result.success ? 'completed' : 'failed';
@@ -535,7 +536,7 @@ export class ForgeEngine {
     this.state.consecutiveFailures = 0;
 
     // Completion guard: check if Leader declared project complete
-    const MAX_ITERATIONS = 20;
+    const MAX_ITERATIONS = Infinity; // No iteration limit
     if (result.output?.includes('PROJECT_COMPLETE')) {
       // Check verifier and critic flags from current iteration
       const canComplete = this.canCompleteProject(iterNum);
@@ -954,7 +955,7 @@ ${iterLog}
       const feedbackContent = existsSync(feedbackPath) ? readFileSync(feedbackPath, 'utf-8') : '';
 
       const hasCriticIssues = /关键问题|CRITICAL|必须解决|严重问题/i.test(criticContent);
-      const hasVerifierIssues = /❌|FALSE|BLOCKED|阻断|blocked by|验证失败|校验失败|check failed|test failed|未修复/i.test(verifierContent);
+      const hasVerifierIssues = /❌\s*CRITICAL|CRITICAL.*❌|编译失败|compile.*(fail|error)|test.*fail|测试失败|功能缺失|代码不能跑/i.test(verifierContent);
       const hasTimeoutWarning = /超时|timed out/i.test(feedbackContent);
 
       if (hasVerifierIssues && this.project.roles[0]) {

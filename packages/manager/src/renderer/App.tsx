@@ -12,6 +12,7 @@ import LogViewer from './pages/LogViewer';
 import SessionViewer from './pages/SessionViewer';
 import FileManager from './pages/FileManager';
 import DeepForgeDashboard from './pages/DeepForgeDashboard';
+import WeChatSetup from './components/wechat/WeChatSetup';
 
 export default function App() {
   const { currentPage, selectedBridge, fetchBridges, navigate, bridges } = useBridgeStore();
@@ -64,6 +65,8 @@ export default function App() {
         return selectedBridge ? <FileManager name={selectedBridge} /> : <EmptyState t={t} />;
       case 'forge':
         return <DeepForgeDashboard />;
+      case 'wechat':
+        return <WeChatSetup />;
       default:
         return selectedBridge ? <BridgeDetail name={selectedBridge} /> : <EmptyState t={t} />;
     }

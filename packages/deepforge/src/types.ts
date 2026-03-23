@@ -92,3 +92,14 @@ export interface ForgeEvent {
   taskId?: string;
   timestamp: string;
 }
+
+// ============ v2 Type Re-exports (non-conflicting) ============
+// For types that conflict with v1 definitions above (ForgeEvent, ForgePhase, ForgeTask),
+// import directly from the specific module:
+//   import type { ForgeEvent } from './types/event';       // 22-member discriminated union
+//   import type { ForgePhase } from './types/middleware';   // identical to v1, with middleware context
+//   import type { ForgeTask } from './types/dashboard';    // identical to v1, with dashboard context
+
+export * from './types/config';
+export * from './types/memory';
+export * from './types/quality';

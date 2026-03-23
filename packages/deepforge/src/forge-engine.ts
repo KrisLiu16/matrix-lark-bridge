@@ -4,6 +4,9 @@
  * Flow: setup → [plan → execute(dynamic) → critic(forced) → verify(forced) → iterate]
  * Critic and Verifier are framework-enforced, cannot be skipped.
  * Index validation is done automatically by the framework (validateIndex), not a separate agent.
+ *
+ * v2: Internal logic replaced with v2 subsystems (EventBus, AsyncSemaphore, MiddlewarePipeline,
+ * ForgeMemory, ForgeConfigManager). Public API unchanged. forge-state.json format unchanged.
  */
 import { writeFileSync, readFileSync, existsSync, mkdirSync, appendFileSync, readdirSync, statSync, copyFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
@@ -12,8 +15,27 @@ import { leaderPrompt, criticPrompt, verifierPrompt, dynamicRolePrompt } from '.
 import { ForgeNotifier, type ForgeNotification } from './forge-notify.js';
 import { buildForgePrompt } from './forge-context.js';
 import type {
-  ForgeProject, ForgeState, ForgeTask, ForgeIteration, ForgePhase, ForgeEvent,
+  ForgeProject, ForgeState, ForgeTask, ForgeIteration,
+  ForgePhase as LegacyForgePhase,
+  ForgeEvent as LegacyForgeEvent,
 } from './types.js';
+
+// v2 subsystems
+import type { ForgeConfig } from './types/config';
+import type { ForgeEvent as ForgeEventV2 } from './types/event';
+import type { MiddlewareContext } from './types/middleware';
+import { createForgeSubsystems, destroyForgeSubsystems, type ForgeSubsystems } from './forge-engine-adapter.js';
+import { DEFAULT_CONFIG } from './forge-config.js';
+import { createForgeEvent } from './forge-events.js';
+import { createMiddlewareContext } from './forge-middleware.js';
+
+// v2 middleware modules
+import { LoopDetectionMiddleware } from './forge-loop-detection.js';
+import { ProgressMiddleware } from './forge-progress.js';
+import { QualityGateMiddleware } from './forge-quality-gate.js';
+import { SummarizationMiddleware } from './forge-summarization.js';
+import { ContextEnrichmentMiddleware } from './forge-context-enrichment.js';
+import { ArtifactTrackingMiddleware } from './forge-artifact-tracking.js';
 
 export class ForgeEngine {
   private project: ForgeProject;
@@ -22,15 +44,18 @@ export class ForgeEngine {
   private statePath: string;
   private stopped = false;
   private log: (msg: string) => void;
-  private onEvent?: (event: ForgeEvent) => void;
+  private onEvent?: (event: LegacyForgeEvent) => void;
   private onNotify?: (n: ForgeNotification) => void;
   private notifier: ForgeNotifier;
+
+  // v2 subsystems
+  private subsystems: ForgeSubsystems;
 
   constructor(
     project: ForgeProject,
     opts?: {
       log?: (msg: string) => void;
-      onEvent?: (event: ForgeEvent) => void;
+      onEvent?: (event: LegacyForgeEvent) => void;
       onNotify?: (n: ForgeNotification) => void;
     },
   ) {
@@ -46,6 +71,35 @@ export class ForgeEngine {
     this.onNotify = opts?.onNotify;
     this.notifier = new ForgeNotifier(this.workDir);
 
+    // Initialize v2 subsystems from default config, adapted to project settings
+    const config = this.buildForgeConfig(project);
+    this.subsystems = createForgeSubsystems(config, {
+      projectId: project.id,
+      title: project.title,
+    });
+
+    // Register v2 middleware modules on the pipeline
+    this.registerMiddleware();
+
+    // Bridge v2 EventBus to legacy onEvent callback
+    if (this.onEvent) {
+      const legacyCallback = this.onEvent;
+      this.subsystems.eventBus.on('*', (event: ForgeEventV2) => {
+        // Map v2 event types to legacy event types
+        const legacyType = this.mapEventType(event.type);
+        if (legacyType) {
+          const legacyEvent: LegacyForgeEvent = {
+            type: legacyType,
+            message: event.message,
+            role: 'source' in event ? (event as any).source : undefined,
+            taskId: 'taskId' in event ? (event as any).taskId : undefined,
+            timestamp: event.timestamp,
+          };
+          legacyCallback(legacyEvent);
+        }
+      });
+    }
+
     // Load or init state
     if (existsSync(this.statePath)) {
       try {
@@ -59,11 +113,10 @@ export class ForgeEngine {
       } catch (err) {
         const t = new Date().toISOString().replace('T', ' ').substring(0, 19);
         console.error(`[${t}] [forge] [${project.id}] [init] Corrupt state file, resetting: ${(err as Error).message}`);
-        // Back up the corrupt file for debugging
         try {
           copyFileSync(this.statePath, this.statePath + '.corrupt');
         } catch { /* ignore */ }
-        this.state = undefined!; // fall through to init below
+        this.state = undefined!;
       }
     }
     if (!this.state) {
@@ -86,58 +139,64 @@ export class ForgeEngine {
     this.initWorkspace();
     this.log(`Started — ${this.project.title}`);
 
-    while (!this.stopped) {
-      try {
-        switch (this.state.phase) {
-          case 'setup':
-            await this.setup();
-            break;
-          case 'planning':
-            await this.plan();
-            break;
-          case 'executing':
-            await this.executeDynamic();
-            break;
-          case 'critiquing':
-            if (this.project.noCritic) {
-              this.log('Critic skipped (disabled)');
-              this.setPhase('verifying');
-            } else {
-              await this.runCritic();
-            }
-            break;
-          case 'verifying':
-            if (this.project.noVerifier) {
-              this.log('Verifier skipped (disabled)');
-              this.setPhase('iterating');
-            } else {
-              await this.runVerifier();
-            }
-            break;
-          case 'iterating':
-            await this.iterate();
-            break;
-          case 'completing':
-            await this.runCompletion();
-            return;
-          case 'paused':
-          case 'completed':
-            return;
-        }
+    try {
+      while (!this.stopped) {
+        try {
+          switch (this.state.phase) {
+            case 'setup':
+              await this.setup();
+              break;
+            case 'planning':
+              await this.plan();
+              break;
+            case 'executing':
+              await this.executeDynamic();
+              break;
+            case 'critiquing':
+              if (this.project.noCritic) {
+                this.log('Critic skipped (disabled)');
+                this.setPhase('verifying');
+              } else {
+                await this.runCritic();
+              }
+              break;
+            case 'verifying':
+              if (this.project.noVerifier) {
+                this.log('Verifier skipped (disabled)');
+                this.setPhase('iterating');
+              } else {
+                await this.runVerifier();
+              }
+              break;
+            case 'iterating':
+              await this.iterate();
+              break;
+            case 'completing':
+              await this.runCompletion();
+              return;
+            case 'paused':
+            case 'completed':
+              return;
+          }
 
-        // Scan & send pending notifications (non-blocking)
-        this.processPendingNotifications();
+          // Scan & send pending notifications (non-blocking)
+          this.processPendingNotifications();
 
-      } catch (err) {
-        this.state.consecutiveFailures++;
-        this.log(`Error: ${(err as Error).message}`);
-        if (this.state.consecutiveFailures >= 3) {
-          this.log('Circuit breaker — pausing');
-          this.setPhase('paused');
-          return;
+        } catch (err) {
+          this.state.consecutiveFailures++;
+          this.log(`Error: ${(err as Error).message}`);
+          this.emitV2Alert('warn', `Engine error: ${(err as Error).message}`);
+          if (this.state.consecutiveFailures >= 3) {
+            this.log('Circuit breaker — pausing');
+            this.setPhase('paused');
+            return;
+          }
+          await this.sleep(30_000);
         }
-        await this.sleep(30_000);
       }
+    } finally {
+      // Cleanup v2 subsystems on exit
+      await destroyForgeSubsystems(this.subsystems).catch(() => {});
     }
   }
 
@@ -152,7 +211,6 @@ export class ForgeEngine {
   // ========== Phases ==========
 
   private async setup(): Promise<void> {
-    // Write brief.md
     writeFileSync(join(this.workDir, 'brief.md'),
       `# ${this.project.title}\n\n${this.project.description}\n`);
     writeFileSync(join(this.workDir, 'index.md'), '# 产出索引\n\n');
@@ -179,6 +237,18 @@ export class ForgeEngine {
 
     this.log(`Planning iteration ${iterNum}...`);
 
+    // Fire pipeline beforeIteration hooks
+    const planCtx = this.buildMiddlewareContext('planning');
+    await this.subsystems.pipeline.fireBeforeIteration(planCtx);
+
+    // Emit v2 iteration_start event
+    void this.subsystems.eventBus.emit(createForgeEvent({
+      type: 'iteration_start' as const,
+      message: `Iteration ${iterNum} started`,
+      iteration: iterNum,
+      plannedTaskCount: 0,
+    }));
+
     const task: ForgeTask = {
       id: `leader-plan-${iterNum}`,
       role: 'leader',
@@ -188,7 +258,6 @@ export class ForgeEngine {
       startedAt: new Date().toISOString(),
     };
 
-    // Add leader task to iteration so it's visible in GUI
     const iter = this.currentIter()!;
     iter.tasks.push(task);
     this.persist();
@@ -203,7 +272,7 @@ export class ForgeEngine {
       taskId: task.id,
       roleName: 'leader',
       taskDescription: task.description,
-      timeoutMs: 60 * 60 * 1000, // 1 hour
+      timeoutMs: 60 * 60 * 1000,
     });
 
     task.status = result.success ? 'completed' : 'failed';
@@ -211,7 +280,7 @@ export class ForgeEngine {
     task.durationMs = result.durationMs;
     task.completedAt = new Date().toISOString();
     task.error = result.error;
-    this.persist(); // Persist immediately so GUI sees Leader plan completed
+    this.persist();
 
     if (!result.success) this.reportTaskError(task, result.error);
 
@@ -269,17 +338,13 @@ export class ForgeEngine {
 
     this.log(`Executing ${pending.length} tasks in parallel (max ${this.project.maxConcurrent} concurrent)...`);
 
-    // Semaphore for concurrency control
-    let running = 0;
-    const waitSlot = () => new Promise<void>(r => {
-      const check = () => {
-        if (running < this.project.maxConcurrent) { running++; r(); }
-        else setTimeout(check, 500);
-      };
-      check();
-    });
+    // Run middleware pipeline before task execution (context enrichment, loop detection, etc.)
+    await this.runPipeline('executing');
 
-    // Execute all tasks in parallel with concurrency limit
+    // Update semaphore capacity to match project config
+    this.subsystems.semaphore.updateMax(this.project.maxConcurrent);
+
+    // Execute all tasks in parallel with AsyncSemaphore concurrency control
     await Promise.all(pending.map(async (task) => {
       const roleConfig = this.project.roles.find(r => r.name === task.role);
       if (!roleConfig) {
@@ -289,43 +354,75 @@ export class ForgeEngine {
         return;
       }
 
-      await waitSlot();
+      // Use v2 AsyncSemaphore instead of while-polling
+      await this.subsystems.semaphore.withLock(async () => {
+        task.status = 'running';
+        task.startedAt = new Date().toISOString();
+        this.persist();
+        this.emit('task_start', `${task.role}: ${task.id}`, task.role, task.id);
 
-      task.status = 'running';
-      task.startedAt = new Date().toISOString();
-      this.persist();
-      this.emit('task_start', `${task.role}: ${task.id}`, task.role, task.id);
-
-      try {
-        const result = await forgeRun({
-          workDir: this.workDir,
-          model: this.project.model,
-          effort: 'medium', // Dynamic roles use medium to avoid long execution
-          systemPrompt: dynamicRolePrompt(roleConfig, this.project),
-          userPrompt: buildForgePrompt(task.role, task, this.project, this.workDir, this.state.currentIteration),
-          env: this.getEnv(),
+        // Emit v2 task_start event
+        void this.subsystems.eventBus.emit(createForgeEvent({
+          type: 'task_start' as const,
+          message: `Task started: ${task.id}`,
           taskId: task.id,
-          roleName: task.role,
-          taskDescription: task.description,
-          timeoutMs: 60 * 60 * 1000, // 1 hour
-        });
+          role: task.role,
+        }));
 
-        task.status = result.success ? 'completed' : 'failed';
-        task.output = result.output;
-        task.costUsd = result.costUsd;
-        task.durationMs = result.durationMs;
-        task.completedAt = new Date().toISOString();
-        task.error = result.error;
-        this.addCost(result.costUsd);
+        try {
+          const result = await forgeRun({
+            workDir: this.workDir,
+            model: this.project.model,
+            effort: 'medium',
+            systemPrompt: dynamicRolePrompt(roleConfig, this.project),
+            userPrompt: buildForgePrompt(task.role, task, this.project, this.workDir, this.state.currentIteration),
+            env: this.getEnv(),
+            taskId: task.id,
+            roleName: task.role,
+            taskDescription: task.description,
+            timeoutMs: 60 * 60 * 1000,
+          });
 
-        const icon = result.success ? '✅' : '❌';
-        this.log(`  ${task.id}: ${icon} (${this.fmtDuration(result.durationMs)})`);
-        this.emit(result.success ? 'task_done' : 'task_fail', `${task.role}: ${task.id}`, task.role, task.id);
+          task.status = result.success ? 'completed' : 'failed';
+          task.output = result.output;
+          task.costUsd = result.costUsd;
+          task.durationMs = result.durationMs;
+          task.completedAt = new Date().toISOString();
+          task.error = result.error;
+          this.addCost(result.costUsd);
 
-        if (!result.success) this.reportTaskError(task, result.error);
-      } finally {
-        running--;
-      }
+          const icon = result.success ? '✅' : '❌';
+          this.log(`  ${task.id}: ${icon} (${this.fmtDuration(result.durationMs)})`);
+          this.emit(result.success ? 'task_done' : 'task_fail', `${task.role}: ${task.id}`, task.role, task.id);
+
+          // Emit v2 task event
+          if (result.success) {
+            void this.subsystems.eventBus.emit(createForgeEvent({
+              type: 'task_done' as const,
+              message: `Task completed: ${task.id}`,
+              taskId: task.id,
+              role: task.role,
+              durationMs: result.durationMs,
+              costUsd: result.costUsd,
+            }));
+          } else {
+            void this.subsystems.eventBus.emit(createForgeEvent({
+              type: 'task_fail' as const,
+              message: `Task failed: ${task.id}`,
+              taskId: task.id,
+              role: task.role,
+              error: result.error || 'Unknown error',
+            }));
+          }
+
+          if (!result.success) this.reportTaskError(task, result.error);
+        } catch (err) {
+          task.status = 'failed';
+          task.error = (err as Error).message;
+          task.completedAt = new Date().toISOString();
+          this.reportTaskError(task, task.error);
+        }
+      });
     }));
 
     this.setPhase('critiquing');
@@ -358,7 +455,7 @@ export class ForgeEngine {
       taskId: task.id,
       roleName: 'critic',
       taskDescription: task.description,
-      timeoutMs: 60 * 60 * 1000, // 1 hour
+      timeoutMs: 60 * 60 * 1000,
     });
 
     // Write critic feedback, preserving user's BINDING requirements
@@ -379,20 +476,16 @@ export class ForgeEngine {
     task.durationMs = result.durationMs;
     task.completedAt = new Date().toISOString();
     task.error = result.error;
-    this.persist(); // Persist immediately so GUI sees Critic completed
+    this.persist();
 
     this.addCost(result.costUsd);
     if (iter) {
       iter.criticFeedback = result.output;
-      // Determine if critic cleared: empty/missing output = failed (crash/timeout)
       const criticOutput = result.output || '';
       if (!criticOutput.trim()) {
-        // Empty output means Critic crashed or timed out — treat as not cleared
         iter.criticCleared = false;
         this.log('⚠️ Critic produced empty output (crash/timeout) — treating as not cleared');
       } else {
-        // Match "关键问题" section followed by numbered items (1. xxx)
-        // Also match standalone CRITICAL markers
         const hasCriticalSection = /关键问题[^]*?\n\s*\d+\.\s/m.test(criticOutput);
         const hasCriticalMarker = /CRITICAL|严重问题/i.test(criticOutput);
         const hasBlockingFeedback = /必须解决[：:]\s*\n\s*\d+\./m.test(criticOutput);
@@ -401,6 +494,15 @@ export class ForgeEngine {
     }
     this.log(`Critic: ${result.success ? '✅' : '❌'} (${this.fmtDuration(result.durationMs)})`);
     this.emit('critic', `Critic completed`, 'critic');
+
+    // Emit v2 critic_review event
+    void this.subsystems.eventBus.emit(createForgeEvent({
+      type: 'critic_review' as const,
+      message: `Critic review for iteration ${iterNum}`,
+      iteration: iterNum,
+      passed: iter?.criticCleared ?? false,
+      feedback: result.output?.substring(0, 500) || '',
+    }));
 
     if (!result.success) this.reportTaskError(task, result.error);
 
@@ -440,7 +542,7 @@ export class ForgeEngine {
       taskId: task.id,
       roleName: 'verifier',
       taskDescription: task.description,
-      timeoutMs: 60 * 60 * 1000, // 1 hour
+      timeoutMs: 60 * 60 * 1000,
     });
 
     task.status = result.success ? 'completed' : 'failed';
@@ -448,22 +550,19 @@ export class ForgeEngine {
     task.durationMs = result.durationMs;
     task.completedAt = new Date().toISOString();
     task.error = result.error;
-    this.persist(); // Persist immediately so GUI sees Verifier completed
+    this.persist();
 
     this.addCost(result.costUsd);
     if (iter) iter.verifierResult = result.output;
     writeFileSync(join(this.workDir, 'reports', 'verifier-report.md'), result.output || '');
 
-    // Determine if verifier passed: empty/missing output = failed (crash/timeout)
     const verifierOutput = result.output || '';
     let hasVerifierIssues: boolean;
     if (!verifierOutput.trim()) {
-      // Empty output means Verifier crashed or timed out — treat as failed
       hasVerifierIssues = true;
       if (iter) iter.verifierPassed = false;
       this.log('⚠️ Verifier produced empty output (crash/timeout) — treating as failed');
     } else {
-      // Only CRITICAL issues block completion — warnings and notes don't
       hasVerifierIssues = /❌\s*CRITICAL|CRITICAL.*❌|编译失败|compile.*(fail|error)|test.*fail|测试失败|功能缺失|代码不能跑/i.test(verifierOutput);
       if (iter) iter.verifierPassed = !hasVerifierIssues;
     }
@@ -476,7 +575,19 @@ export class ForgeEngine {
 
     this.log(`Verifier: ${!hasVerifierIssues ? '✅' : '❌'} (${this.fmtDuration(result.durationMs)})`);
 
+    // Emit v2 verifier_check event
+    void this.subsystems.eventBus.emit(createForgeEvent({
+      type: 'verifier_check' as const,
+      message: `Verifier check for iteration ${iterNum}`,
+      iteration: iterNum,
+      passed: !hasVerifierIssues,
+      result: verifierOutput.substring(0, 500),
+    }));
+
     if (!result.success) this.reportTaskError(task, result.error);
+
+    // Run middleware pipeline after verification (quality gate, summarization, artifact tracking)
+    await this.runPipeline('verifying');
 
     this.setPhase('iterating');
   }
@@ -484,7 +595,6 @@ export class ForgeEngine {
   private async iterate(): Promise<void> {
     const iterNum = this.state.currentIteration;
 
-    // Leader reviews and summarizes
     const task: ForgeTask = {
       id: `leader-iterate-${iterNum}`,
       role: 'leader',
@@ -507,7 +617,7 @@ export class ForgeEngine {
       taskId: task.id,
       roleName: 'leader',
       taskDescription: task.description,
-      timeoutMs: 60 * 60 * 1000, // 1 hour — same as all other roles
+      timeoutMs: 60 * 60 * 1000,
     });
 
     task.status = result.success ? 'completed' : 'failed';
@@ -515,15 +625,13 @@ export class ForgeEngine {
     task.durationMs = result.durationMs;
     task.completedAt = new Date().toISOString();
     task.error = result.error;
-    this.persist(); // Persist immediately so GUI sees iterate completed
+    this.persist();
 
     this.addCost(result.costUsd);
 
-    // Append to iteration log
     appendFileSync(join(this.workDir, 'iteration-log.md'),
       `\n## 迭代 ${iterNum}\n${result.output?.substring(0, 2000) || ''}\n`);
 
-    // Update status
     writeFileSync(join(this.workDir, 'status.md'),
       `# 状态\n\nDeepForge v0.8.3\n阶段：迭代 ${iterNum} 完成\n迭代：${iterNum}\n`);
 
@@ -535,10 +643,23 @@ export class ForgeEngine {
     this.log(`Iteration ${iterNum} complete`);
     this.state.consecutiveFailures = 0;
 
-    // Completion guard: check if Leader declared project complete
-    const MAX_ITERATIONS = Infinity; // No iteration limit
+    // Emit v2 iteration_end event
+    const iterStartTime = iter?.startedAt ? new Date(iter.startedAt).getTime() : Date.now();
+    void this.subsystems.eventBus.emit(createForgeEvent({
+      type: 'iteration_end' as const,
+      message: `Iteration ${iterNum} completed`,
+      iteration: iterNum,
+      durationMs: Date.now() - iterStartTime,
+      success: iter?.verifierPassed !== false,
+    }));
+
+    // Fire pipeline afterIteration hooks
+    const iterCtx = this.buildMiddlewareContext('iterating');
+    await this.subsystems.pipeline.fireAfterIteration(iterCtx);
+
+    // Completion guard
+    const MAX_ITERATIONS = Infinity;
     if (result.output?.includes('PROJECT_COMPLETE')) {
-      // Check verifier and critic flags from current iteration
       const canComplete = this.canCompleteProject(iterNum);
 
       if (canComplete) {
@@ -557,21 +678,20 @@ export class ForgeEngine {
           `- Verifier 通过: ${iter?.verifierPassed ? '✅' : '❌ 有未修复问题'}\n` +
           `- Critic 清除: ${iter?.criticCleared ? '✅' : '❌ 有关键问题未解决'}\n\n` +
           `必须先解决上述问题才能声明完成。剩余迭代配额: ${MAX_ITERATIONS - iterNum} 轮。\n`);
-        this.setPhase('planning'); // Force next iteration
+        this.setPhase('planning');
       }
     } else {
       if (iterNum >= MAX_ITERATIONS) {
         this.log(`⚠️ Max iterations (${MAX_ITERATIONS}) reached without PROJECT_COMPLETE — auto-completing`);
         this.setPhase('completing');
       } else {
-        this.setPhase('planning'); // Next iteration
+        this.setPhase('planning');
       }
     }
   }
 
   // ========== Completion ==========
 
-  /** Package deliverables using a dedicated CC agent */
   private async runCompletion(): Promise<void> {
     this.log('Spawning packager agent to organize deliverables...');
 
@@ -597,7 +717,7 @@ export class ForgeEngine {
       taskId: task.id,
       roleName: 'packager',
       taskDescription: task.description,
-      timeoutMs: 60 * 60 * 1000, // 1 hour
+      timeoutMs: 60 * 60 * 1000,
     });
 
     task.status = result.success ? 'completed' : 'failed';
@@ -608,7 +728,6 @@ export class ForgeEngine {
     this.addCost(result.costUsd);
     this.persist();
 
-    // Send notification
     const nId = `complete-${this.project.id}-${Date.now()}`;
     const notification: ForgeNotification = {
       id: nId,
@@ -665,7 +784,6 @@ export class ForgeEngine {
   }
 
   private packagerTask(): string {
-    // Read index.md and iteration-log for context
     const indexPath = join(this.workDir, 'index.md');
     const indexContent = existsSync(indexPath) ? readFileSync(indexPath, 'utf-8') : '（空）';
     const iterLogPath = join(this.workDir, 'iteration-log.md');
@@ -691,133 +809,94 @@ ${iterLog}
 5. 写 reports/packager-report.md 汇报`;
   }
 
-  /** Collect all files recursively from a directory */
-  private collectFiles(dir: string): string[] {
-    if (!existsSync(dir)) return [];
-    const result: string[] = [];
-    const entries = readdirSync(dir);
-    for (const entry of entries) {
-      const full = join(dir, entry);
-      try {
-        const st = statSync(full);
-        if (st.isDirectory()) result.push(...this.collectFiles(full));
-        else result.push(full);
-      } catch { /* skip */ }
-    }
-    return result;
+  // ========== Middleware Pipeline ==========
+
+  /** Register all 6 v2 middleware modules on the pipeline. */
+  private registerMiddleware(): void {
+    const { pipeline } = this.subsystems;
+
+    // 1. Context enrichment (priority 50) — enriches context with project info
+    const contextEnrichment = new ContextEnrichmentMiddleware();
+    pipeline.use(contextEnrichment.execute.bind(contextEnrichment), {
+      name: 'context-enrichment', priority: 50, continueOnError: true, timeout: 5_000,
+    });
+
+    // 2. Progress tracking (priority 60) — tracks iteration progress
+    const progress = new ProgressMiddleware(null);
+    pipeline.use(progress.execute.bind(progress), {
+      name: 'progress', priority: 60, continueOnError: true,
+    });
+
+    // 3. Artifact tracking (priority 65) — tracks file artifacts
+    const artifactTracking = new ArtifactTrackingMiddleware({ projectRoot: this.workDir });
+    pipeline.use(artifactTracking.execute.bind(artifactTracking), {
+      name: 'artifact-tracking', priority: 65, continueOnError: true, timeout: 10_000,
+    });
+
+    // 4. Summarization (priority 70) — summarizes large outputs
+    const summarization = new SummarizationMiddleware();
+    pipeline.use(summarization.execute.bind(summarization), {
+      name: 'summarization', priority: 70, continueOnError: true, timeout: 10_000,
+    });
+
+    // 5. Quality gate (priority 110) — validates quality criteria
+    const qualityGate = new QualityGateMiddleware();
+    pipeline.use(qualityGate.execute.bind(qualityGate), {
+      name: 'quality-gate', priority: 110, continueOnError: true, timeout: 60_000,
+    });
+
+    // 6. Loop detection (priority 115) — detects repeated patterns
+    const loopDetection = new LoopDetectionMiddleware();
+    pipeline.use(loopDetection.execute.bind(loopDetection), {
+      name: 'loop-detection', priority: 115, continueOnError: true,
+    });
+
+    this.log(`Registered ${pipeline.size} middleware: ${pipeline.chain.join(', ')}`);
   }
 
-  /** Generate an Anthropic-style HTML report */
-  private generateReport(files: string[]): string {
-    const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-    const iterCount = this.state.currentIteration;
-    const totalCost = this.state.totalCostUsd.toFixed(2);
-    const elapsed = Date.now() - new Date(this.state.iterations[0]?.startedAt || Date.now()).getTime();
-    const hours = Math.floor(elapsed / 3600000);
-    const mins = Math.floor((elapsed % 3600000) / 60000);
+  /** Build a MiddlewareContext from current engine state. */
+  private buildMiddlewareContext(phase: string): MiddlewareContext {
+    const iter = this.currentIter();
+    const tasks = iter?.tasks ?? [];
+    return createMiddlewareContext({
+      config: {
+        projectId: this.project.id,
+        model: this.project.model,
+        effort: this.project.effort || 'medium',
+        maxConcurrent: this.project.maxConcurrent,
+        phase: phase as any,
+        iteration: this.state.currentIteration,
+      },
+      iteration: iter ? {
+        number: iter.number,
+        taskCount: tasks.length,
+        completedCount: tasks.filter(t => t.status === 'completed').length,
+        failedCount: tasks.filter(t => t.status === 'failed').length,
+        previousCriticCleared: this.state.iterations.length > 1
+          ? this.state.iterations[this.state.iterations.length - 2]?.criticCleared
+          : undefined,
+      } : undefined,
+      state: {},
+    });
+  }
 
-    // Read index.md for artifact listing
-    const indexPath = join(this.workDir, 'index.md');
-    const indexContent = existsSync(indexPath) ? readFileSync(indexPath, 'utf-8') : '';
-
-    // Read iteration log for summary
-    const iterLogPath = join(this.workDir, 'iteration-log.md');
-    const iterLog = existsSync(iterLogPath) ? readFileSync(iterLogPath, 'utf-8') : '';
-
-    // Parse file listing
-    const fileRows = files.map(f => {
-      const rel = f.startsWith(this.workDir) ? f.slice(this.workDir.length + 1) : f;
-      const st = statSync(f);
-      const size = st.size > 1024 * 1024
-        ? `${(st.size / 1024 / 1024).toFixed(1)} MB`
-        : st.size > 1024
-          ? `${(st.size / 1024).toFixed(1)} KB`
-          : `${st.size} B`;
-      return `<tr><td>${rel}</td><td>${size}</td></tr>`;
-    }).join('\n');
-
-    // Iteration summary rows
-    const iterRows = this.state.iterations.map(iter => {
-      const taskCount = iter.tasks.length;
-      const completed = iter.tasks.filter(t => t.status === 'completed').length;
-      const failed = iter.tasks.filter(t => t.status === 'failed').length;
-      return `<tr>
-        <td>${iter.number}</td>
-        <td>${completed}/${taskCount} 完成${failed > 0 ? `，${failed} 失败` : ''}</td>
-        <td>${iter.completedAt ? new Date(iter.completedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '进行中'}</td>
-      </tr>`;
-    }).join('\n');
-
-    return `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${this.project.title} — DeepForge Report</title>
-<style>
-  :root { --bg: #fafaf9; --fg: #1c1917; --accent: #d97706; --border: #e7e5e4; --card: #fff; --muted: #78716c; }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif; background: var(--bg); color: var(--fg); line-height: 1.6; }
-  .container { max-width: 900px; margin: 0 auto; padding: 3rem 2rem; }
-  header { border-bottom: 1px solid var(--border); padding-bottom: 2rem; margin-bottom: 2rem; }
-  header h1 { font-size: 1.75rem; font-weight: 600; letter-spacing: -0.02em; }
-  header .meta { color: var(--muted); font-size: 0.875rem; margin-top: 0.5rem; }
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 2.5rem; }
-  .stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; }
-  .stat-card .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
-  .stat-card .value { font-size: 1.5rem; font-weight: 600; margin-top: 0.25rem; }
-  section { margin-bottom: 2.5rem; }
-  section h2 { font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
-  table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
-  th, td { text-align: left; padding: 0.625rem 0.75rem; border-bottom: 1px solid var(--border); }
-  th { font-weight: 500; color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
-  .index-block { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.25rem; font-size: 0.875rem; white-space: pre-wrap; font-family: 'SF Mono', 'Fira Code', monospace; }
-  footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.75rem; text-align: center; }
-  footer a { color: var(--accent); text-decoration: none; }
-</style>
-</head>
-<body>
-<div class="container">
-  <header>
-    <h1>${this.project.title}</h1>
-    <div class="meta">${this.project.description}</div>
-    <div class="meta">生成于 ${now} · DeepForge Multi-Agent Framework</div>
-  </header>
-
-  <div class="stats">
-    <div class="stat-card"><div class="label">迭代轮次</div><div class="value">${iterCount}</div></div>
-    <div class="stat-card"><div class="label">总耗时</div><div class="value">${hours}h ${mins}m</div></div>
-    <div class="stat-card"><div class="label">团队规模</div><div class="value">${this.project.roles.length + 3} 角色</div></div>
-    <div class="stat-card"><div class="label">产出文件</div><div class="value">${files.length} 个</div></div>
-  </div>
-
-  <section>
-    <h2>迭代历程</h2>
-    <table>
-      <thead><tr><th>轮次</th><th>任务</th><th>完成时间</th></tr></thead>
-      <tbody>${iterRows}</tbody>
-    </table>
-  </section>
-
-  <section>
-    <h2>产出索引</h2>
-    <div class="index-block">${indexContent || '暂无索引'}</div>
-  </section>
-
-  <section>
-    <h2>产出文件清单</h2>
-    <table>
-      <thead><tr><th>路径</th><th>大小</th></tr></thead>
-      <tbody>${fileRows || '<tr><td colspan="2">暂无文件</td></tr>'}</tbody>
-    </table>
-  </section>
-
-  <footer>
-    Powered by <a href="#">DeepForge</a> · Multi-Agent Orchestration Framework
-  </footer>
-</div>
-</body>
-</html>`;
+  /** Run the middleware pipeline for a given phase. Errors are logged but don't block the engine. */
+  private async runPipeline(phase: string): Promise<void> {
+    const ctx = this.buildMiddlewareContext(phase);
+    try {
+      const result = await this.subsystems.pipeline.execute(ctx);
+      if (!result.success) {
+        this.log(`Pipeline warning (${phase}): ${result.error || 'partial failure'}`);
+      }
+      // Log middleware step results
+      for (const step of result.steps) {
+        if (step.status === 'error' || step.status === 'timeout') {
+          this.log(`  middleware ${step.name}: ${step.status} (${step.durationMs}ms) — ${step.error}`);
+        }
+      }
+    } catch (err) {
+      this.log(`Pipeline error (${phase}): ${(err as Error).message}`);
+    }
   }
 
   // ========== Helpers ==========
@@ -829,7 +908,6 @@ ${iterLog}
     }
   }
 
-  /** Scan pending notifications, fire callback, mark as sent */
   private processPendingNotifications(): void {
     const pending = this.notifier.getPending();
     for (const n of pending) {
@@ -839,10 +917,19 @@ ${iterLog}
     }
   }
 
-  private setPhase(phase: ForgePhase): void {
+  private setPhase(phase: LegacyForgePhase): void {
+    const oldPhase = this.state.phase;
     this.state.phase = phase;
     this.persist();
     this.emit('phase', `Phase → ${phase}`);
+
+    // Emit v2 phase_transition event
+    void this.subsystems.eventBus.emit(createForgeEvent({
+      type: 'phase_transition' as const,
+      message: `Phase transition: ${oldPhase} → ${phase}`,
+      from: oldPhase,
+      to: phase,
+    }));
   }
 
   private addCost(usd: number): void {
@@ -863,12 +950,53 @@ ${iterLog}
     renameSync(tmpPath, this.statePath);
   }
 
-  private emit(type: ForgeEvent['type'], message: string, role?: string, taskId?: string): void {
+  /** Emit legacy event (v1 callback) */
+  private emit(type: LegacyForgeEvent['type'], message: string, role?: string, taskId?: string): void {
     this.log(message);
     this.onEvent?.({ type, message, role, taskId, timestamp: new Date().toISOString() });
   }
 
-  /** Hot-reload mutable config fields (e.g. maxConcurrent changed via GUI) */
+  /** Emit v2 alert event */
+  private emitV2Alert(severity: 'info' | 'warn' | 'error', message: string): void {
+    void this.subsystems.eventBus.emit(createForgeEvent({
+      type: 'alert' as const,
+      message,
+      severity,
+    }));
+  }
+
+  /** Map v2 event types to legacy event types */
+  private mapEventType(v2Type: string): LegacyForgeEvent['type'] | null {
+    const mapping: Record<string, LegacyForgeEvent['type']> = {
+      'phase_transition': 'phase',
+      'task_start': 'task_start',
+      'task_done': 'task_done',
+      'task_fail': 'task_fail',
+      'critic_review': 'critic',
+      'alert': 'alert',
+      'error': 'alert',
+    };
+    return mapping[v2Type] ?? null;
+  }
+
+  /** Build ForgeConfig from ForgeProject settings */
+  private buildForgeConfig(project: ForgeProject): ForgeConfig {
+    return {
+      ...DEFAULT_CONFIG,
+      project: {
+        ...DEFAULT_CONFIG.project,
+        model: project.model,
+        effort: (project.effort === 'low' || project.effort === 'medium' || project.effort === 'high')
+          ? project.effort : DEFAULT_CONFIG.project.effort,
+        maxConcurrent: project.maxConcurrent,
+      },
+      concurrency: {
+        ...DEFAULT_CONFIG.concurrency,
+        maxWorkers: project.maxConcurrent,
+      },
+    };
+  }
+
   private reloadConfig(): void {
     for (const cfgName of ['deepforge.json', 'forge-project.json']) {
       const cfgPath = join(this.workDir, cfgName);
@@ -916,7 +1044,6 @@ ${iterLog}
     if (iterNum > 1) {
       const prevIter = this.state.iterations.find(i => i.number === iterNum - 1);
       if (prevIter) {
-        // Re-queue failed tasks with retry context
         const failed = prevIter.tasks.filter(t => t.status === 'failed' && !['leader', 'critic', 'verifier'].includes(t.role));
         for (const ft of failed) {
           if (this.project.roles.some(r => r.name === ft.role)) {
@@ -929,7 +1056,6 @@ ${iterLog}
             });
           }
         }
-        // If verifier found issues, create fix task
         if (prevIter.verifierResult?.includes('❌')) {
           const first = this.project.roles[0];
           if (first) {
@@ -946,7 +1072,6 @@ ${iterLog}
     }
 
     if (tasks.length === 0) {
-      // Analyze critic/verifier/feedback to create targeted fallback tasks
       const criticPath = join(this.workDir, 'reports', 'critic-report.md');
       const verifierPath = join(this.workDir, 'reports', 'verifier-report.md');
       const feedbackPath = join(this.workDir, 'feedback.md');
@@ -1014,12 +1139,10 @@ ${iterLog}
     return broken;
   }
 
-  /** Report task error: write to feedback.md + create Feishu notification */
   private reportTaskError(task: ForgeTask, error?: string): void {
     const errMsg = error || '未知错误';
     this.log(`❌ 任务失败 [${task.id}]: ${errMsg}`);
 
-    // 1. Write to feedback.md so Leader sees the error
     appendFileSync(join(this.workDir, 'feedback.md'),
       `\n\n# ❌ 任务执行失败 — ${task.id}\n\n` +
       `- **角色**: ${task.role}\n` +
@@ -1029,7 +1152,6 @@ ${iterLog}
       `- **时间**: ${new Date().toISOString()}\n\n` +
       `Leader 请注意此失败并在下轮规划中处理。\n`);
 
-    // 2. Create notification for Feishu delivery
     const nId = `err-${task.id}-${Date.now()}`;
     const notification: ForgeNotification = {
       id: nId,
@@ -1046,14 +1168,11 @@ ${iterLog}
     );
   }
 
-  /** Check if project can complete: verifier passed and critic cleared */
   private canCompleteProject(iterNum: number): boolean {
     const iter = this.currentIter();
-    if (!iter) return true; // No iteration data, allow completion
+    if (!iter) return true;
 
-    // If verifier was skipped, treat as passed; otherwise require explicit true (not undefined)
     const verifierOk = this.project.noVerifier || (iter.verifierPassed === true);
-    // If critic was skipped, treat as cleared; otherwise require explicit true (not undefined)
     const criticOk = this.project.noCritic || (iter.criticCleared === true);
 
     if (!verifierOk) this.log(`⚠️ Completion blocked: Verifier found unresolved issues in iteration ${iterNum}`);
@@ -1073,5 +1192,4 @@ ${iterLog}
   private sleep(ms: number): Promise<void> {
     return new Promise(r => setTimeout(r, ms));
   }
-
 }

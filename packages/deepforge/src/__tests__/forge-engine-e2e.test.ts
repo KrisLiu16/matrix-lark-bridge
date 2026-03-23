@@ -64,7 +64,7 @@ vi.mock('../forge-quality-gate.js', () => ({
     readonly name = 'quality-gate';
     readonly priority = 110;
     readonly enabled = true;
-    readonly continueOnError = true;
+    readonly continueOnError = false;
     readonly timeout = 60_000;
 
     async execute(ctx: Record<string, any>, next: () => Promise<any>): Promise<any> {
@@ -81,7 +81,7 @@ vi.mock('../forge-loop-detection.js', () => ({
     readonly name = 'loop-detection';
     readonly priority = 115;
     readonly enabled = true;
-    readonly continueOnError = true;
+    readonly continueOnError = false;
 
     async execute(ctx: Record<string, any>, next: () => Promise<any>): Promise<any> {
       if (loopDetectionBlockPhase && ctx.config?.phase === loopDetectionBlockPhase) {
@@ -334,5 +334,147 @@ describe('ForgeEngine Full-Flow E2E via engine.run()', () => {
     const iter = engine.currentState.iterations[0];
     expect(iter).toBeDefined();
     expect(iter.verifierPassed).toBe(false);
+  });
+
+  /**
+   * Test 4: Happy-path — all middleware passes, worker executes, verifier passes
+   *
+   * Flow via engine.run():
+   *   setup → plan (leader creates 1 coder task) → execute (middleware passes, coder runs)
+   *   → critic → verify (verifier says pass, no blocking) → iterate (engine.stop())
+   *
+   * Verifies:
+   * 1. Coder task is executed (forgeRun called with roleName=coder)
+   * 2. verifierPassed is true
+   * 3. criticCleared is true
+   * 4. All expected roles are called in order
+   */
+  it('should complete successfully when all middleware passes and verifier approves', async () => {
+    // No blocking flags set — both middleware will call next() cleanly
+
+    const mockForgeRun = forgeRun as ReturnType<typeof vi.fn>;
+    const project = createTestProject();
+    let engine: ForgeEngine;
+    const calledRoles: string[] = [];
+
+    mockForgeRun.mockImplementation(async (opts: Record<string, any>) => {
+      calledRoles.push(opts.roleName);
+
+      if (opts.roleName === 'leader') {
+        if (opts.taskId?.startsWith('leader-iterate')) {
+          engine.stop();
+          return { success: true, output: 'All tasks completed successfully', costUsd: 0.01, durationMs: 50 };
+        }
+        // Plan: create 1 coder task
+        return {
+          success: true,
+          output: '```json\n{"tasks": [{"id": "coder-1", "role": "coder", "description": "implement feature"}]}\n```',
+          costUsd: 0.01,
+          durationMs: 50,
+        };
+      }
+      if (opts.roleName === 'coder') {
+        return { success: true, output: 'Feature implemented', costUsd: 0.02, durationMs: 100 };
+      }
+      if (opts.roleName === 'critic') {
+        return { success: true, output: 'Code looks good, no issues', costUsd: 0.01, durationMs: 50 };
+      }
+      if (opts.roleName === 'verifier') {
+        return { success: true, output: '✅ PASS: All checks passed, quality is good', costUsd: 0.01, durationMs: 50 };
+      }
+      return { success: true, output: 'Done', costUsd: 0.01, durationMs: 50 };
+    });
+
+    engine = new ForgeEngine(project, { log: () => {} });
+    await engine.run();
+
+    // Coder was called (worker executed)
+    expect(calledRoles).toContain('coder');
+
+    // Verifier was called
+    expect(calledRoles).toContain('verifier');
+
+    // Critic was called
+    expect(calledRoles).toContain('critic');
+
+    // verifierPassed should be true (no blocking middleware, verifier said PASS)
+    const iter = engine.currentState.iterations[0];
+    expect(iter).toBeDefined();
+    expect(iter.verifierPassed).toBe(true);
+
+    // criticCleared should be true (no critical issues)
+    expect(iter.criticCleared).toBe(true);
+
+    // Coder task should be completed
+    const coderTasks = iter.tasks.filter((t) => t.role === 'coder');
+    expect(coderTasks.length).toBe(1);
+    expect(coderTasks[0].status).toBe('completed');
+
+    // All roles called: leader(plan), coder, critic, verifier, leader(iterate)
+    expect(calledRoles.filter(r => r === 'leader').length).toBe(2);
+  });
+
+  /**
+   * Test 5: Happy-path with multiple workers — concurrent execution
+   *
+   * Flow via engine.run():
+   *   setup → plan (leader creates 2 coder tasks) → execute (both coders run)
+   *   → critic → verify (pass) → iterate (engine.stop())
+   *
+   * Verifies:
+   * 1. Both coder tasks are executed
+   * 2. All tasks reach 'completed' status
+   * 3. Engine terminates cleanly via engine.stop()
+   */
+  it('should execute multiple worker tasks concurrently and complete', async () => {
+    const mockForgeRun = forgeRun as ReturnType<typeof vi.fn>;
+    const project = createTestProject({ maxConcurrent: 3 });
+    let engine: ForgeEngine;
+    const coderCallIds: string[] = [];
+
+    mockForgeRun.mockImplementation(async (opts: Record<string, any>) => {
+      if (opts.roleName === 'leader') {
+        if (opts.taskId?.startsWith('leader-iterate')) {
+          engine.stop();
+          return { success: true, output: 'Iteration complete', costUsd: 0.01, durationMs: 50 };
+        }
+        // Plan: create 2 coder tasks
+        return {
+          success: true,
+          output: '```json\n{"tasks": [{"id": "coder-a", "role": "coder", "description": "build UI"}, {"id": "coder-b", "role": "coder", "description": "build API"}]}\n```',
+          costUsd: 0.01,
+          durationMs: 50,
+        };
+      }
+      if (opts.roleName === 'coder') {
+        coderCallIds.push(opts.taskId);
+        return { success: true, output: `Task ${opts.taskId} done`, costUsd: 0.02, durationMs: 100 };
+      }
+      if (opts.roleName === 'critic') {
+        return { success: true, output: 'Looks good', costUsd: 0.01, durationMs: 50 };
+      }
+      if (opts.roleName === 'verifier') {
+        return { success: true, output: '✅ PASS: Everything verified', costUsd: 0.01, durationMs: 50 };
+      }
+      return { success: true, output: 'Done', costUsd: 0.01, durationMs: 50 };
+    });
+
+    engine = new ForgeEngine(project, { log: () => {} });
+    await engine.run();
+
+    // Both coder tasks were executed
+    expect(coderCallIds.length).toBe(2);
+
+    // All coder tasks should be completed
+    const iter = engine.currentState.iterations[0];
+    expect(iter).toBeDefined();
+    const coderTasks = iter.tasks.filter((t) => t.role === 'coder');
+    expect(coderTasks.length).toBe(2);
+    for (const t of coderTasks) {
+      expect(t.status).toBe('completed');
+    }
+
+    // Verifier passed
+    expect(iter.verifierPassed).toBe(true);
   });
 });

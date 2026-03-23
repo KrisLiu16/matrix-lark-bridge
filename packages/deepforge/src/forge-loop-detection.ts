@@ -222,7 +222,7 @@ export class LoopDetectionMiddleware implements Middleware {
   readonly name = 'loop-detection';
   readonly priority = 115; // runs after quality-gate (110) in afterIteration
   readonly enabled = true;
-  readonly continueOnError = true; // non-fatal — don't break the pipeline
+  readonly continueOnError = false; // Loop detection failures must block the pipeline
 
   private config: LoopDetectionConfig;
   private window: CircularBuffer<HashEntry>;

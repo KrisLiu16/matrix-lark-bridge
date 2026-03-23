@@ -308,7 +308,7 @@ export class QualityGateMiddleware implements Middleware {
   readonly priority = 110;
   readonly enabled: boolean;
   readonly timeout = 60_000; // Quality checks may involve LLM calls
-  readonly continueOnError = true; // Don't crash pipeline on quality check failure
+  readonly continueOnError = false; // Quality gate failures must block the pipeline
 
   private readonly rules: QualityRule[];
   private readonly thresholdConfig: QualityThresholdConfig;

@@ -85,7 +85,7 @@ describe('QualityGateMiddleware', () => {
       expect(mw.name).toBe('quality-gate');
       expect(mw.priority).toBe(110);
       expect(mw.enabled).toBe(true);
-      expect(mw.continueOnError).toBe(true);
+      expect(mw.continueOnError).toBe(false);
     });
 
     it('accepts custom config overrides', () => {

@@ -132,7 +132,7 @@ describe('LoopDetectionMiddleware', () => {
       expect(mw.name).toBe('loop-detection');
       expect(mw.priority).toBe(115);
       expect(mw.enabled).toBe(true);
-      expect(mw.continueOnError).toBe(true);
+      expect(mw.continueOnError).toBe(false);
     });
   });
 

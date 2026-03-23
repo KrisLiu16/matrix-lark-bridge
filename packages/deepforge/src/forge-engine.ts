@@ -623,6 +623,13 @@ export class ForgeEngine {
     // If pipeline crashed or a blocking middleware failed during verification, mark verifier as failed
     if (!verifyPipelineResult) {
       this.log('Post-verification pipeline crashed — marking verifier as failed');
+      void this.subsystems.eventBus.emit(createForgeEvent({
+        type: 'middleware_error' as const,
+        message: 'Pipeline crashed during verification — treated as blocking failure',
+        middlewareName: 'pipeline',
+        error: 'pipeline crash (null result)',
+        recovered: false,
+      }));
       const iter = this.currentIter();
       if (iter) iter.verifierPassed = false;
     } else if (!verifyPipelineResult.success) {

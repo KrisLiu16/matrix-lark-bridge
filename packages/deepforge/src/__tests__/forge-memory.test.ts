@@ -64,6 +64,7 @@ describe('ForgeMemory', () => {
   let mem: ForgeMemory;
 
   beforeEach(() => {
+    vi.clearAllMocks();
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-15T12:00:00Z'));
     uuidCounter = 0;

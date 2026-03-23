@@ -107,6 +107,7 @@ describe('ForgeConfigManager', () => {
   let mgr: ForgeConfigManager;
 
   beforeEach(() => {
+    vi.clearAllMocks();
     mgr = new ForgeConfigManager();
   });
 

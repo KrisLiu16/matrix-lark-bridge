@@ -150,6 +150,7 @@ export class MiddlewarePipeline {
         timeout: options.timeout ?? 30_000,
         continueOnError: options.continueOnError ?? false,
         shouldRun: options.shouldRun,
+        blocking: options.blocking ?? false,
       },
     };
     if (idx >= 0) {
@@ -371,19 +372,19 @@ export class MiddlewarePipeline {
 
       // ── Skip: disabled ──
       if (!reg.options.enabled) {
-        steps.push({ name: reg.options.name, status: 'skipped', durationMs: 0 });
+        steps.push({ name: reg.options.name, status: 'skipped', durationMs: 0, blocking: reg.options.blocking });
         return dispatch(i + 1, current);
       }
 
       // ── Skip: shouldRun predicate ──
       if (reg.options.shouldRun && !reg.options.shouldRun(current)) {
-        steps.push({ name: reg.options.name, status: 'skipped', durationMs: 0 });
+        steps.push({ name: reg.options.name, status: 'skipped', durationMs: 0, blocking: reg.options.blocking });
         return dispatch(i + 1, current);
       }
 
       // ── Skip: pipeline aborted ──
       if (current.metadata.aborted) {
-        steps.push({ name: reg.options.name, status: 'aborted', durationMs: 0 });
+        steps.push({ name: reg.options.name, status: 'aborted', durationMs: 0, blocking: reg.options.blocking });
         return dispatch(i + 1, current);
       }
 
@@ -409,7 +410,7 @@ export class MiddlewarePipeline {
 
         const elapsed = Date.now() - stepStart;
         current.metadata.timing[reg.options.name] = elapsed;
-        steps.push({ name: reg.options.name, status: 'executed', durationMs: elapsed });
+        steps.push({ name: reg.options.name, status: 'executed', durationMs: elapsed, blocking: reg.options.blocking });
 
         // Emit middleware_exit event
         this.emitMiddlewareEvent('middleware_exit', reg.options.name, `Exited middleware: ${reg.options.name} (${elapsed}ms)`, elapsed);
@@ -425,6 +426,7 @@ export class MiddlewarePipeline {
           status: isTimeout ? 'timeout' : 'error',
           durationMs: elapsed,
           error: errMsg,
+          blocking: reg.options.blocking,
         });
 
         // Emit middleware_error event

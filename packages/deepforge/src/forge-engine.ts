@@ -341,10 +341,22 @@ export class ForgeEngine {
     // Run middleware pipeline before task execution (context enrichment, loop detection, etc.)
     const pipelineResult = await this.runPipeline('executing');
 
-    // If a blocking middleware (quality-gate, loop-detection) failed, skip execution
-    if (pipelineResult && !pipelineResult.success) {
+    // If pipeline crashed (null) or a blocking middleware failed, skip execution
+    if (!pipelineResult) {
+      this.log('Pipeline crashed — treating as blocking failure. Skipping task execution.');
+      void this.subsystems.eventBus.emit(createForgeEvent({
+        type: 'middleware_error' as const,
+        message: 'Pipeline crashed before execution — treated as blocking failure',
+        middlewareName: 'pipeline',
+        error: 'pipeline crash (null result)',
+        recovered: false,
+      }));
+      this.setPhase('iterating');
+      return;
+    }
+    if (!pipelineResult.success) {
       const blockingStep = pipelineResult.steps.find(
-        s => (s.name === 'quality-gate' || s.name === 'loop-detection') && (s.status === 'error' || s.status === 'timeout'),
+        s => s.blocking && (s.status === 'error' || s.status === 'timeout'),
       );
       if (blockingStep) {
         this.log(`Blocking middleware failure: ${blockingStep.name} — ${blockingStep.error}. Skipping task execution.`);
@@ -608,10 +620,14 @@ export class ForgeEngine {
     // Run middleware pipeline after verification (quality gate, summarization, artifact tracking)
     const verifyPipelineResult = await this.runPipeline('verifying');
 
-    // If a blocking middleware failed during verification, mark verifier as failed
-    if (verifyPipelineResult && !verifyPipelineResult.success) {
+    // If pipeline crashed or a blocking middleware failed during verification, mark verifier as failed
+    if (!verifyPipelineResult) {
+      this.log('Post-verification pipeline crashed — marking verifier as failed');
+      const iter = this.currentIter();
+      if (iter) iter.verifierPassed = false;
+    } else if (!verifyPipelineResult.success) {
       const blockingStep = verifyPipelineResult.steps.find(
-        s => (s.name === 'quality-gate' || s.name === 'loop-detection') && (s.status === 'error' || s.status === 'timeout'),
+        s => s.blocking && (s.status === 'error' || s.status === 'timeout'),
       );
       if (blockingStep) {
         this.log(`Post-verification pipeline failure: ${blockingStep.name} — ${blockingStep.error}`);
@@ -873,13 +889,13 @@ ${iterLog}
     // 5. Quality gate (priority 110) — validates quality criteria (blocking: failure halts pipeline)
     const qualityGate = new QualityGateMiddleware();
     pipeline.use(qualityGate.execute.bind(qualityGate), {
-      name: 'quality-gate', priority: 110, continueOnError: false, timeout: 60_000,
+      name: 'quality-gate', priority: 110, continueOnError: false, timeout: 60_000, blocking: true,
     });
 
     // 6. Loop detection (priority 115) — detects repeated patterns (blocking: failure halts pipeline)
     const loopDetection = new LoopDetectionMiddleware();
     pipeline.use(loopDetection.execute.bind(loopDetection), {
-      name: 'loop-detection', priority: 115, continueOnError: false,
+      name: 'loop-detection', priority: 115, continueOnError: false, blocking: true,
     });
 
     // Register iteration lifecycle hooks so fireBeforeIteration/fireAfterIteration are not no-ops

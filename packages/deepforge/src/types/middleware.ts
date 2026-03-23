@@ -269,6 +269,14 @@ export interface MiddlewareOptions {
    * ```
    */
   shouldRun?: (ctx: MiddlewareContext) => boolean;
+
+  /**
+   * If true, this middleware is considered blocking — its failure (error/timeout)
+   * causes the engine to treat the pipeline result as a hard stop.
+   * Non-blocking middleware failures are logged but do not halt execution.
+   * @default false
+   */
+  blocking?: boolean;
 }
 
 // ============ Middleware Interface (class-based) ============
@@ -363,6 +371,8 @@ export interface MiddlewareStepResult {
   durationMs: number;
   /** Error message if status is 'error' or 'timeout' */
   error?: string;
+  /** Whether this middleware was registered as blocking */
+  blocking?: boolean;
 }
 
 /**
@@ -591,6 +601,7 @@ export const MIDDLEWARE_OPTION_DEFAULTS: Required<Omit<MiddlewareOptions, 'name'
   priority: 50,
   timeout: 30_000,
   continueOnError: false,
+  blocking: false,
 };
 
 /**

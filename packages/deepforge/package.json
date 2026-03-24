@@ -1,6 +1,6 @@
 {
   "name": "@mlb/deepforge",
-  "version": "0.9.0",
+  "version": "1.0.0",
   "type": "module",
   "bin": {
     "deepforge": "./dist/index.js"

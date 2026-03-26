@@ -1,6 +1,6 @@
 {
   "name": "@mlb/wechat-sdk",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Standalone WeChat iLink Bot SDK for matrix-lark-bridge",
   "type": "module",
   "main": "dist/index.js",

@@ -454,13 +454,7 @@ export default function WeChatSetup() {
                 <li>点击「扫码连接」获取二维码</li>
                 <li>使用微信扫描二维码</li>
                 <li>在微信上确认登录</li>
-                <li>连接成功后，你的微信号将成为 Bot</li>
-                <li>其他用户添加好友后即可通过微信与 Claude 对话</li>
               </ol>
-              <div className="mt-4 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
-                <span className="mr-1 font-medium">注意:</span>
-                扫码后该微信号将作为 Bot 运行，请使用专用微信号。
-              </div>
             </div>
           )}
         </div>

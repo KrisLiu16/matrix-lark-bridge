@@ -1,6 +1,6 @@
 {
   "name": "matrix-lark-bridge-root",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "private": true,
   "scripts": {
     "dev:bridge": "pnpm -F @mlb/bridge dev",
